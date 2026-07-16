@@ -1,0 +1,18 @@
+[project]
+name = "demand-sim"
+version = "0.1.0"
+description = "Ground-truth demand curve simulator and ideal-dataset generator for forecasting research"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "pandas>=2.1", "scipy>=1.11", "statsmodels>=0.14"]
+
+[project.optional-dependencies]
+estimators = ["doubleml", "econml", "linearmodels", "rdrobust", "pyfixest", "lightgbm"]
+forecasting = ["gluonts", "chronos-forecasting"]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
