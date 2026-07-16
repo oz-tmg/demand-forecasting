@@ -38,7 +38,8 @@ demand-sim/
 │   ├── 03_models_python_r.md       # every estimator, in Python AND R, with parity notes
 │   ├── 04_experimentation.md       # randomization units, sample sizes, contamination guardrails
 │   ├── 05_endogenous_pricing.md    # OLS bias mechanics + IV/CF/DML-IV/RD fixes, both languages
-│   └── 06_phase2_dataset.md        # Phase 2 dataset: arrivals, censoring, column dictionary
+│   ├── 06_phase2_dataset.md        # Phase 2 dataset: arrivals, censoring, column dictionary
+│   └── 07_phase3_experiments.md    # Phase 3: designs, guardrails, power, surge-RD
 ├── src/demand_sim/
 │   ├── config.py      # SegmentConfig / SimulationConfig (+ Phase 2-4 blocks)
 │   ├── population.py  # heterogeneous consumer pool
@@ -48,11 +49,17 @@ demand-sim/
 │   ├── metrics.py     # estimators + scoring vs truth, power calculator
 │   ├── arrivals.py    # Phase 2: NHPP intensity (trend, dow, annual, price, promo)
 │   ├── inventory.py   # Phase 2: (s,S) replenishment → sales censoring
-│   └── panel.py       # Phase 2: fact_sales_daily generator, obs/oracle views
+│   ├── panel.py       # Phase 2: fact_sales_daily generator, obs/oracle views
+│   ├── experiments.py # Phase 3: user/session/switchback/geo assignment + estimation
+│   ├── guardrails.py  # Phase 3: SRM, balance, dual-exposure, A/A battery
+│   ├── power.py       # Phase 3: Monte Carlo power, design scorecard
+│   └── rd.py          # Phase 3: surge-RD sessions + local-linear estimator
 ├── scripts/generate_phase2_dataset.py  # CLI: writes data/*.csv
 ├── data/                               # generated dataset (seed-reproducible)
-├── examples/quickstart.py
-└── tests/                              # acceptance criteria from the spec (phases 1-2)
+├── examples/
+│   ├── quickstart.py
+│   └── phase3_experiments.py           # scorecard + guardrails + RD demo
+└── tests/                              # acceptance criteria from the spec (phases 1-3)
 ```
 
 ## Quickstart
@@ -109,7 +116,7 @@ it is the phenomenon.
 |---|---|---|
 | 1 | Static demand engine, randomized price cells, estimator scoring | ✅ this repo |
 | 2 | NHPP arrivals, trend/seasonality/promos, inventory & censoring, daily panel export | ✅ (docs/06; holidays + GluonTS export pending) |
-| 3 | Experiment module: user/session/switchback/geo assignment, surge-RD, SRM & contamination guardrails, Monte Carlo power | spec'd (docs/04) |
+| 3 | Experiment module: user/session/switchback/geo assignment, surge-RD, SRM & contamination guardrails, Monte Carlo power | ✅ (docs/07; CUPED + sequential bounds pending) |
 | 4 | Endogenous pricing, substitution, reference prices, demand shifting, interference | spec'd (docs/05) |
 
 ## Key references

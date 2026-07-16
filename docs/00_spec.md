@@ -1,6 +1,6 @@
 # SPEC — Demand Curve Simulator & Ideal Forecasting Dataset Generator
 
-**Status:** Phases 1–2 implemented (Phase 2: docs/06_phase2_dataset.md) · Phases 3–4 specified
+**Status:** Phases 1–3 implemented (docs/06, docs/07) · Phase 4 specified
 **Owner:** Alex
 **Purpose:** A ground-truth demand simulator that (a) simulates pricing experiments capable of
 tracing a demand curve, (b) emits an "ideal dataset" for demand forecasting research, and
