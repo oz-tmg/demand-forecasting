@@ -35,14 +35,23 @@ def simulate_inventory(units_demanded: np.ndarray,
 
     Reorders on inventory *position* (on hand + on order) so pipeline stock
     is not double-ordered. Starts fully stocked at S.
-    """
-    if cfg.stockout_behavior != "lost":
-        raise NotImplementedError(
-            f"stockout_behavior={cfg.stockout_behavior!r} is Phase 4")
 
+    stockout_behavior (spec §3.3):
+      "lost"      — unmet demand vanishes (Phase 2 default)
+      "backorder" — unmet demand queues and is filled when stock arrives
+                    (Phase 4); sales are shifted, not destroyed
+      "substitute" — cross-product spill; handled at the portfolio level by
+                    substitution.py, not here
+    """
+    if cfg.stockout_behavior == "substitute":
+        raise NotImplementedError(
+            "substitute spill is cross-product; use substitution.py")
+
+    backorder = cfg.stockout_behavior == "backorder"
     s, S, lead = cfg.reorder_point, cfg.order_up_to, cfg.lead_time_days
     n = len(units_demanded)
     on_hand = S
+    backlog = 0
     pipeline: dict[int, int] = {}  # arrival_day -> qty
 
     sold = np.zeros(n, dtype=int)
@@ -57,10 +66,13 @@ def simulate_inventory(units_demanded: np.ndarray,
         receipts[day] = qty
         inv_start[day] = on_hand
 
-        take = min(int(units_demanded[day]), on_hand)
+        want = int(units_demanded[day]) + backlog
+        take = min(want, on_hand)
         sold[day] = take
         on_hand -= take
-        stockout[day] = take < units_demanded[day]
+        stockout[day] = take < want
+        if backorder:
+            backlog = want - take
         sold_out[day] = on_hand == 0
 
         position = on_hand + sum(pipeline.values())

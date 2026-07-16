@@ -39,7 +39,8 @@ demand-sim/
 │   ├── 04_experimentation.md       # randomization units, sample sizes, contamination guardrails
 │   ├── 05_endogenous_pricing.md    # OLS bias mechanics + IV/CF/DML-IV/RD fixes, both languages
 │   ├── 06_phase2_dataset.md        # Phase 2 dataset: arrivals, censoring, column dictionary
-│   └── 07_phase3_experiments.md    # Phase 3: designs, guardrails, power, surge-RD
+│   ├── 07_phase3_experiments.md    # Phase 3: designs, guardrails, power, surge-RD
+│   └── 08_phase4_endogeneity.md    # Phase 4: endogeneity, behavior, substitution, interference
 ├── src/demand_sim/
 │   ├── config.py      # SegmentConfig / SimulationConfig (+ Phase 2-4 blocks)
 │   ├── population.py  # heterogeneous consumer pool
@@ -53,13 +54,18 @@ demand-sim/
 │   ├── experiments.py # Phase 3: user/session/switchback/geo assignment + estimation
 │   ├── guardrails.py  # Phase 3: SRM, balance, dual-exposure, A/A battery
 │   ├── power.py       # Phase 3: Monte Carlo power, design scorecard
-│   └── rd.py          # Phase 3: surge-RD sessions + local-linear estimator
+│   ├── rd.py          # Phase 3: surge-RD sessions + local-linear estimator
+│   ├── endogenous.py  # Phase 4: demand-responsive pricing DGP + OLS/IV/CF
+│   ├── behavior.py    # Phase 4: reference prices, strategic waiting
+│   ├── substitution.py# Phase 4: cross-price + stockout spill
+│   └── interference.py# Phase 4: shared-capacity coupling across arms
 ├── scripts/generate_phase2_dataset.py  # CLI: writes data/*.csv
 ├── data/                               # generated dataset (seed-reproducible)
 ├── examples/
 │   ├── quickstart.py
-│   └── phase3_experiments.py           # scorecard + guardrails + RD demo
-└── tests/                              # acceptance criteria from the spec (phases 1-3)
+│   ├── phase3_experiments.py           # scorecard + guardrails + RD demo
+│   └── phase4_endogeneity.py           # bias curves + interference + detectors
+└── tests/                              # acceptance criteria from the spec (phases 1-4)
 ```
 
 ## Quickstart
@@ -117,7 +123,7 @@ it is the phenomenon.
 | 1 | Static demand engine, randomized price cells, estimator scoring | ✅ this repo |
 | 2 | NHPP arrivals, trend/seasonality/promos, inventory & censoring, daily panel export | ✅ (docs/06; holidays + GluonTS export pending) |
 | 3 | Experiment module: user/session/switchback/geo assignment, surge-RD, SRM & contamination guardrails, Monte Carlo power | ✅ (docs/07; CUPED + sequential bounds pending) |
-| 4 | Endogenous pricing, substitution, reference prices, demand shifting, interference | spec'd (docs/05) |
+| 4 | Endogenous pricing, substitution, reference prices, demand shifting, interference | ✅ (docs/08; DML rows + CUPED pending) |
 
 ## Key references
 

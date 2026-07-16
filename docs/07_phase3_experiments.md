@@ -75,10 +75,11 @@ the clustered designs earn their variance cost — and the guardrails detect the
 
 ## 6. Known gaps vs spec (deferred)
 
-- Interference / shared-capacity coupling between arms (spec §3.4, Phase 4) —
-  without it, switchback and geo designs show no bias advantage
-- Strategic-waiting detector (docs/04 §3.4) — needs Phase 4 demand shifting to
-  generate the signature
+- ~~Interference / shared-capacity coupling between arms~~ — **shipped in
+  Phase 4** (`interference.py`, docs/08 §4): split designs now show the bias
+  the clustered designs avoid
+- ~~Strategic-waiting detector~~ — **shipped in Phase 4**
+  (`guardrails.strategic_waiting_check` + `behavior.simulate_with_waiting`)
 - CUPED / pre-period adjustment and sequential-testing bounds (docs/04 §3.4–3.5)
 - Market-level heterogeneity (markets are currently exchangeable, so geo SEs
   are optimistic relative to real geo experiments)

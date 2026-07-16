@@ -81,6 +81,58 @@ def aa_battery(cfg: SimulationConfig, exp: ExperimentConfig,
                 alpha * (1 - alpha) / n_reps))}
 
 
+def strategic_waiting_check(sessions: pd.DataFrame) -> dict:
+    """Refresh-arbitrage signature (docs/04 §3.4).
+
+    Under per-session randomization, strategic waiting means consumers come
+    back BECAUSE the last price was high — so revisit sessions' previous
+    prices skew above the price distribution served at random. Organic
+    return traffic (price-independent) has uniform previous prices, which is
+    the null this test is calibrated against.
+
+    Requires `prev_price` (NaN on first visits; real logs derive it from
+    consumer_id + timestamps). One-sided z-test of mean prev_price of
+    revisit sessions vs the unconditional mean served price; alarm at
+    p < 0.01.
+    """
+    revisits = sessions.loc[sessions["prev_price"].notna(), "prev_price"]
+    baseline = sessions["quoted_price"]
+    if len(revisits) < 30:
+        return {"n_revisits": int(len(revisits)), "waiting_alarm": False,
+                "note": "too few revisit sessions to test"}
+    diff = float(revisits.mean() - baseline.mean())
+    se = float(np.sqrt(revisits.var(ddof=1) / len(revisits)
+                       + baseline.var(ddof=1) / len(baseline)))
+    z = diff / se if se > 0 else 0.0
+    from scipy.stats import norm
+    p = float(norm.sf(z))  # one-sided: waiting pushes prev prices UP
+    return {"n_revisits": int(len(revisits)),
+            "mean_prev_price_revisits": float(revisits.mean()),
+            "mean_price_served": float(baseline.mean()),
+            "diff": diff, "z": float(z), "p_value": p,
+            "waiting_alarm": bool(p < 0.01)}
+
+
+def interference_probe(sessions: pd.DataFrame,
+                       pure_control_sessions: pd.DataFrame,
+                       arm_control: str = "arm_0") -> dict:
+    """Pure-control probe (docs/04 §3.4): compare within-experiment control
+    conversion against held-out markets untouched by the experiment. A gap
+    beyond noise means treatment is leaking through shared capacity.
+    """
+    a = sessions.loc[sessions["arm"] == arm_control, "purchased"]
+    b = pure_control_sessions["purchased"]
+    diff = float(a.mean() - b.mean())
+    se = float(np.sqrt(a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b)))
+    z = diff / se if se > 0 else 0.0
+    from scipy.stats import norm
+    p = float(2 * norm.sf(abs(z)))
+    return {"conv_in_experiment_control": float(a.mean()),
+            "conv_pure_control": float(b.mean()),
+            "diff": diff, "z": float(z), "p_value": p,
+            "interference_alarm": bool(p < 0.01)}
+
+
 def run_guardrails(cfg: SimulationConfig, exp: ExperimentConfig,
                    out: dict) -> dict:
     """All post-run checks for one experiment output (docs/04 §5)."""
