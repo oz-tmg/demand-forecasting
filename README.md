@@ -37,16 +37,22 @@ demand-sim/
 │   ├── 02_censored_demand.md       # why inventory/stockouts are first-class
 │   ├── 03_models_python_r.md       # every estimator, in Python AND R, with parity notes
 │   ├── 04_experimentation.md       # randomization units, sample sizes, contamination guardrails
-│   └── 05_endogenous_pricing.md    # OLS bias mechanics + IV/CF/DML-IV/RD fixes, both languages
+│   ├── 05_endogenous_pricing.md    # OLS bias mechanics + IV/CF/DML-IV/RD fixes, both languages
+│   └── 06_phase2_dataset.md        # Phase 2 dataset: arrivals, censoring, column dictionary
 ├── src/demand_sim/
 │   ├── config.py      # SegmentConfig / SimulationConfig (+ Phase 2-4 blocks)
 │   ├── population.py  # heterogeneous consumer pool
 │   ├── demand.py      # ORACLE: choice probs, true curves, elasticities, surplus
 │   ├── pricing.py     # fixed / randomized cells (+ surge-RD stub)
 │   ├── simulate.py    # session generator → observable + oracle views
-│   └── metrics.py     # estimators + scoring vs truth, power calculator
+│   ├── metrics.py     # estimators + scoring vs truth, power calculator
+│   ├── arrivals.py    # Phase 2: NHPP intensity (trend, dow, annual, price, promo)
+│   ├── inventory.py   # Phase 2: (s,S) replenishment → sales censoring
+│   └── panel.py       # Phase 2: fact_sales_daily generator, obs/oracle views
+├── scripts/generate_phase2_dataset.py  # CLI: writes data/*.csv
+├── data/                               # generated dataset (seed-reproducible)
 ├── examples/quickstart.py
-└── tests/test_phase1.py            # acceptance criteria from the spec
+└── tests/                              # acceptance criteria from the spec (phases 1-2)
 ```
 
 ## Quickstart
@@ -54,6 +60,7 @@ demand-sim/
 ```bash
 pip install numpy pandas scipy statsmodels
 python examples/quickstart.py
+python scripts/generate_phase2_dataset.py   # regenerate data/ (seed 42)
 python -m pytest tests/ -q
 ```
 
@@ -101,7 +108,7 @@ it is the phenomenon.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Static demand engine, randomized price cells, estimator scoring | ✅ this repo |
-| 2 | NHPP arrivals, trend/seasonality/holidays/promos, inventory & censoring, daily panel + GluonTS export | spec'd (docs/00 §3.2–3.3, docs/02) |
+| 2 | NHPP arrivals, trend/seasonality/promos, inventory & censoring, daily panel export | ✅ (docs/06; holidays + GluonTS export pending) |
 | 3 | Experiment module: user/session/switchback/geo assignment, surge-RD, SRM & contamination guardrails, Monte Carlo power | spec'd (docs/04) |
 | 4 | Endogenous pricing, substitution, reference prices, demand shifting, interference | spec'd (docs/05) |
 
