@@ -1,6 +1,6 @@
 [project]
 name = "demand-sim"
-version = "0.4.0"
+version = "0.5.0"
 description = "Ground-truth demand curve simulator and ideal-dataset generator for forecasting research"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "pandas>=2.1", "scipy>=1.11", "statsmodels>=0.14"]

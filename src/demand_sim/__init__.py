@@ -20,8 +20,10 @@ from .substitution import SubstitutionConfig, simulate_substitute_pair
 from .interference import (InterferenceConfig, apply_capacity, pool_capacity,
                            run_interference_experiment,
                            interference_design_bias)
+from .forecast import (ForecastBenchmarkConfig, run_forecast_benchmark,
+                       OBSERVABLE_MODELS)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "SegmentConfig", "SimulationConfig", "default_config",
     "demand_curve", "true_elasticity", "consumer_surplus",
@@ -39,4 +41,5 @@ __all__ = [
     "SubstitutionConfig", "simulate_substitute_pair",
     "InterferenceConfig", "apply_capacity", "pool_capacity",
     "run_interference_experiment", "interference_design_bias",
+    "ForecastBenchmarkConfig", "run_forecast_benchmark", "OBSERVABLE_MODELS",
 ]

@@ -12,6 +12,10 @@ demand, experiment-driven elasticity).
 
 ## Why a simulator?
 
+The first and most obvious reason is that I don't have access to a robust enough dataset that
+meets the requirements for building out a demand curve.  Its a hard reality so the best I can
+do is create a simulator to provides a mock dataset that can meet the assumptions.   
+
 Every method for learning a demand curve rests on assumptions you cannot verify in the field:
 randomization integrity, no interference, unconfoundedness, instrument validity. A simulator
 inverts the problem — *you* set the truth, then measure exactly how each method fails when its
@@ -40,7 +44,8 @@ demand-sim/
 │   ├── 05_endogenous_pricing.md    # OLS bias mechanics + IV/CF/DML-IV/RD fixes, both languages
 │   ├── 06_phase2_dataset.md        # Phase 2 dataset: arrivals, censoring, column dictionary
 │   ├── 07_phase3_experiments.md    # Phase 3: designs, guardrails, power, surge-RD
-│   └── 08_phase4_endogeneity.md    # Phase 4: endogeneity, behavior, substitution, interference
+│   ├── 08_phase4_endogeneity.md    # Phase 4: endogeneity, behavior, substitution, interference
+│   └── 09_phase5_forecasting.md    # Phase 5: the forecasting benchmark (censoring bias, money table)
 ├── src/demand_sim/
 │   ├── config.py      # SegmentConfig / SimulationConfig (+ Phase 2-4 blocks)
 │   ├── population.py  # heterogeneous consumer pool
@@ -58,14 +63,16 @@ demand-sim/
 │   ├── endogenous.py  # Phase 4: demand-responsive pricing DGP + OLS/IV/CF
 │   ├── behavior.py    # Phase 4: reference prices, strategic waiting
 │   ├── substitution.py# Phase 4: cross-price + stockout spill
-│   └── interference.py# Phase 4: shared-capacity coupling across arms
+│   ├── interference.py# Phase 4: shared-capacity coupling across arms
+│   └── forecast.py    # Phase 5: rolling-origin benchmark, unconstraining, oracle ceiling
 ├── scripts/generate_phase2_dataset.py  # CLI: writes data/*.csv
 ├── data/                               # generated dataset (seed-reproducible)
 ├── examples/
 │   ├── quickstart.py
 │   ├── phase3_experiments.py           # scorecard + guardrails + RD demo
-│   └── phase4_endogeneity.py           # bias curves + interference + detectors
-└── tests/                              # acceptance criteria from the spec (phases 1-4)
+│   ├── phase4_endogeneity.py           # bias curves + interference + detectors
+│   └── phase5_forecasting.py           # the money table: sales-trained vs demand-graded
+└── tests/                              # acceptance criteria from the spec (phases 1-5)
 ```
 
 ## Quickstart
@@ -124,6 +131,7 @@ it is the phenomenon.
 | 2 | NHPP arrivals, trend/seasonality/promos, inventory & censoring, daily panel export | ✅ (docs/06; holidays + GluonTS export pending) |
 | 3 | Experiment module: user/session/switchback/geo assignment, surge-RD, SRM & contamination guardrails, Monte Carlo power | ✅ (docs/07; CUPED + sequential bounds pending) |
 | 4 | Endogenous pricing, substitution, reference prices, demand shifting, interference | ✅ (docs/08; DML rows + CUPED pending) |
+| 5 | Forecasting benchmark: censoring-blind vs stockout-aware vs EM-unconstrained, graded against oracle demand with a lambda-true ceiling | ✅ (docs/09; quantile loss + Chronos hooks pending) |
 
 ## Key references
 
