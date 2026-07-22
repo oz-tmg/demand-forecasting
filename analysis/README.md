@@ -47,11 +47,17 @@ install.packages(c(
 ))
 ```
 
-2. VS Code: install the **R extension** (REditorSupport). `languageserver`
+2. Install **pandoc** — `rmarkdown::render` requires it, and it does NOT ship
+   with R (it ships with RStudio, which we're not using):
+
+```bash
+brew install pandoc        # macOS; verify with: pandoc -v
+```
+
+3. VS Code: install the **R extension** (REditorSupport). `languageserver`
    powers completion/linting; [radian](https://github.com/randy3k/radian) is a
-   nicer console but optional. Pandoc ships with the extension's knit path or
-   via RStudio-free `pandoc` install.
-3. Knit from the repo's `analysis/` directory (relative paths assume it):
+   nicer console but optional.
+4. Knit from the repo's `analysis/` directory (relative paths assume it):
    open a file and run **R: Knit Rmd**, or from a terminal:
 
 ```bash
