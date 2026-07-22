@@ -1,0 +1,142 @@
+---
+title: "01 — Log-log OLS / FE panels (fixest)"
+subtitle: "demand-sim · docs/03 §1 · the naive benchmark everyone starts with"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+Model: `log Q = alpha + theta * log P + X gamma + u`, theta = elasticity.
+Identification here rests on price variation coming only from promo discounts,
+which ALSO lift demand directly — so theta absorbs the promo effect unless we
+control for it. And `units_sold` is censored at stock, so the target itself is
+wrong on the busiest days. Both problems are visible below because the oracle
+knows the truth.
+
+# 1. Data
+
+```{r data}
+library(fixest)
+library(ggplot2)
+
+panel <- read.csv("../data/fact_sales_daily.csv")
+dim_ps <- read.csv("../data/dim_product_store.csv")   # ORACLE: true per-series params
+
+panel$date <- as.Date(panel$date)
+panel$week <- format(panel$date, "%G-W%V")
+panel$series <- paste(panel$product_id, panel$store_id, sep = "_")
+# pandas writes booleans as "True"/"False" — convert to logical explicitly
+panel$promo_flag <- panel$promo_flag == "True"
+panel$sold_out <- panel$sold_out == "True"
+str(panel[, c("date", "series", "avg_price", "promo_flag", "units_sold", "units_demanded")])
+```
+
+Observable columns feed the model; `units_demanded`, `lost_sales`, `lambda_true`
+are oracle and appear only in validation.
+
+# 2. Train
+
+The log spec drops zero-sale days — itself a selection on low demand. PPML
+(`fepois`) keeps them; we fit both.
+
+```{r train}
+est_data <- subset(panel, units_sold > 0)
+
+fit_ols  <- feols(log(units_sold) ~ log(avg_price) + promo_flag | series + week,
+                  data = est_data, cluster = ~series)
+fit_ppml <- fepois(units_sold ~ log(avg_price) + promo_flag | series + week,
+                   data = panel, cluster = ~series)
+
+etable(fit_ols, fit_ppml, headers = c("log-OLS", "PPML"))
+```
+
+# 3. Validate against the oracle
+
+The DGP gives every series a true constant elasticity (`dim_product_store.csv`).
+The pooled estimand is a sales-weighted blend of those; and because training on
+censored sales flattens the promo-day spikes, we also fit the same model on
+oracle demand to isolate the censoring cost.
+
+```{r validate}
+w <- aggregate(units_sold ~ product_id + store_id, panel, sum)
+w <- merge(w, dim_ps[, c("product_id", "store_id", "elasticity")])
+theta_true_weighted <- with(w, sum(elasticity * units_sold) / sum(units_sold))
+
+# ORACLE contrast: identical spec, uncensored target (scoring-only!)
+fit_oracle <- fepois(units_demanded ~ log(avg_price) + promo_flag | series + week,
+                     data = panel, cluster = ~series)
+
+data.frame(
+  estimator = c("log-OLS (sales)", "PPML (sales)", "PPML (oracle demand)"),
+  theta_hat = c(coef(fit_ols)["log(avg_price)"],
+                coef(fit_ppml)["log(avg_price)"],
+                coef(fit_oracle)["log(avg_price)"]),
+  theta_true_weighted = theta_true_weighted
+) |> transform(bias = theta_hat - theta_true_weighted)
+```
+
+The sales-trained coefficients sit closer to zero than the demand-trained one:
+censoring clips exactly the high-demand (promo, cheap) observations, flattening
+the measured curve. The residual gap on the oracle row is aggregation across
+heterogeneous series — the pooled estimand is not any one series' elasticity.
+
+# 4. The demand curve it implies
+
+For one high-volume series, hold covariates at baseline and trace predicted
+units over a price grid, against the true curve from the DGP parameters.
+
+```{r curve}
+top <- names(sort(tapply(panel$units_sold, panel$series, sum), decreasing = TRUE))[1]
+p0  <- dim_ps[paste(dim_ps$product_id, dim_ps$store_id, sep = "_") == top, ]
+
+grid <- seq(0.6 * p0$base_price, 1.4 * p0$base_price, length.out = 60)
+theta_hat <- coef(fit_ppml)["log(avg_price)"]
+
+base_units <- mean(panel$units_sold[panel$series == top & !panel$promo_flag])
+curve <- data.frame(
+  price = grid,
+  fitted = base_units * (grid / p0$base_price)^theta_hat,
+  truth  = base_units * (grid / p0$base_price)^p0$elasticity   # ORACLE
+)
+
+ggplot(curve, aes(price)) +
+  geom_line(aes(y = truth,  color = "true curve (oracle)"), linewidth = 1) +
+  geom_line(aes(y = fitted, color = "PPML fitted"), linetype = "dashed", linewidth = 1) +
+  labs(title = paste("Series", top, "— fitted vs true demand curve"),
+       y = "expected units/day", color = NULL)
+```
+
+# 5. Forecast (Phase 5)
+
+Hold out the last 28 days, forecast with the PPML fit, grade against oracle
+`units_demanded` — the evaluation a real forecaster can never run.
+
+```{r forecast}
+cutoff <- max(panel$date) - 27
+train  <- subset(panel, date <  cutoff)
+test   <- subset(panel, date >= cutoff)
+
+fit_fc <- fepois(units_sold ~ log(avg_price) + promo_flag | series, data = train)
+test$pred <- predict(fit_fc, newdata = test)
+
+err_d <- test$pred - test$units_demanded   # vs ORACLE truth
+err_s <- test$pred - test$units_sold       # vs what a practitioner would see
+data.frame(
+  target = c("units_demanded (oracle)", "units_sold (observable)"),
+  mae  = c(mean(abs(err_d)), mean(abs(err_s))),
+  rmse = c(sqrt(mean(err_d^2)), sqrt(mean(err_s^2))),
+  bias = c(mean(err_d), mean(err_s))
+)
+```
+
+The bias against true demand is more negative than against sales: the model
+inherits the censoring in its training target. The Tobit walk-through (06) and
+the Python Phase 5 benchmark (docs/09) show the corrections; the endogeneity
+walk-throughs (04, 07) show why even the *uncensored* coefficient can lie once
+prices respond to demand.

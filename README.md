@@ -16,10 +16,10 @@ The first and most obvious reason is that I don't have access to a robust enough
 meets the requirements for building out a demand curve.  Its a hard reality so the best I can
 do is create a simulator to provides a mock dataset that can meet the assumptions.   
 
-Every method for learning a demand curve rests on assumptions you cannot verify in the field:
-randomization integrity, no interference, unconfoundedness, instrument validity. A simulator
-inverts the problem — *you* set the truth, then measure exactly how each method fails when its
-assumptions break. The value is threefold:
+Every method for estimating a demand curve rests on assumptions that cannot be full verified 
+in the field: randomization integrity, no interference, unconfoundedness, instrument validity. 
+A simulator inverts the problem. *I* set the truth, then measure exactly how each method fails 
+when its assumptions break. The value is threefold:
 
 1. **Methods testbed** — score RCT cell means, RD, DML, IV, and structural estimators against
    known elasticities, per population segment.

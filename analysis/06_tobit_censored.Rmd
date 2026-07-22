@@ -1,0 +1,154 @@
+---
+title: "06 — Tobit / censored demand"
+subtitle: "demand-sim · docs/03 §7, docs/02 · sales are not demand once inventory exists"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+`units_sold = min(units_demanded, on_hand)`. On sold-out days the observation
+is right-censored: we know demand was *at least* sales. The observable
+`sold_out` flag tells us which rows are censored — per-row censoring, so we use
+`survival::survreg` directly (docs/03: `AER::tobit` wraps it for a fixed
+threshold). Censoring concentrates on promo days here, so ignoring it biases
+exactly the promo/price coefficients a pricing team cares about.
+
+# 1. Data
+
+```{r data}
+library(survival)
+library(ggplot2)
+
+panel <- read.csv("../data/fact_sales_daily.csv")
+panel$date <- as.Date(panel$date)
+panel$series <- paste(panel$product_id, panel$store_id, sep = "_")
+panel$log_price <- log(panel$avg_price)
+panel$dow <- factor(format(panel$date, "%u"))
+# pandas writes booleans as "True"/"False" — convert to logical explicitly
+panel$promo_flag <- panel$promo_flag == "True"
+panel$sold_out <- panel$sold_out == "True"
+
+c(share_soldout_days = mean(panel$sold_out),
+  share_soldout_promo = mean(panel$sold_out[panel$promo_flag]),
+  share_soldout_nonpromo = mean(panel$sold_out[!panel$promo_flag]))
+```
+
+# 2. Train: naive GLM vs per-row-censored Tobit
+
+Log-normal working model for daily demand. The Tobit likelihood treats
+sold-out rows as `demand >= units_sold`; uncensored rows as observed.
+
+```{r train}
+panel$y <- log1p(panel$units_sold)
+panel$uncensored <- as.numeric(!panel$sold_out)   # 1 = event observed
+
+fit_naive <- lm(y ~ log_price + promo_flag + dow + series, data = panel)
+
+fit_tobit <- survreg(Surv(y, uncensored, type = "right") ~
+                       log_price + promo_flag + dow + series,
+                     data = panel, dist = "gaussian")
+
+data.frame(term = c("log_price", "promo_flagTRUE"),
+           naive = coef(fit_naive)[c("log_price", "promo_flagTRUE")],
+           tobit = coef(fit_tobit)[c("log_price", "promo_flagTRUE")])
+```
+
+The Tobit price and promo coefficients are larger in magnitude: the naive fit
+learned from spikes that were clipped at the shelf.
+
+# 3. Validate against the oracle
+
+Predicted latent demand vs true `units_demanded`, split by censoring status —
+the naive model should look fine on clean days and fail exactly on sold-out
+days.
+
+```{r validate}
+mu_naive <- predict(fit_naive)
+mu_tobit <- predict(fit_tobit)          # latent mean on log1p scale
+panel$pred_naive <- expm1(mu_naive)
+panel$pred_tobit <- expm1(mu_tobit + 0.5 * fit_tobit$scale^2)  # lognormal mean
+
+by_status <- function(pred) {
+  err <- pred - panel$units_demanded    # ORACLE target
+  c(bias_all = mean(err),
+    bias_soldout_days = mean(err[panel$sold_out]),
+    bias_clean_days = mean(err[!panel$sold_out]))
+}
+rbind(naive = by_status(panel$pred_naive),
+      tobit = by_status(panel$pred_tobit))
+```
+
+# 4. The demand curve it implies
+
+For the highest-censoring series: fitted demand vs price under both models,
+against true expected demand (`lambda_true`, oracle).
+
+```{r curve}
+cens <- aggregate(cbind(lost_sales, units_demanded) ~ series, panel, sum)
+worst <- cens$series[which.max(cens$lost_sales / cens$units_demanded)]
+s <- subset(panel, series == worst)
+
+grid <- data.frame(log_price = log(seq(min(s$avg_price), max(s$avg_price), length.out = 40)),
+                   promo_flag = FALSE, dow = factor(3, levels = levels(panel$dow)),
+                   series = worst)
+grid$price <- exp(grid$log_price)
+grid$naive <- expm1(predict(fit_naive, grid))
+grid$tobit <- expm1(predict(fit_tobit, grid) + 0.5 * fit_tobit$scale^2)
+
+truth_pts <- aggregate(lambda_true ~ avg_price, s, mean)   # ORACLE
+
+ggplot() +
+  geom_line(data = grid, aes(price, naive, color = "naive (sales-trained)"),
+            linetype = "dashed", linewidth = 1) +
+  geom_line(data = grid, aes(price, tobit, color = "tobit (censoring-aware)"),
+            linewidth = 1) +
+  geom_point(data = truth_pts, aes(avg_price, lambda_true, color = "true mean demand (oracle)"),
+             size = 3) +
+  labs(x = "price", y = "units/day", color = NULL,
+       title = paste("Series", worst, "— the naive curve is clipped at the shelf"))
+```
+
+The gap opens at the *low-price* end — promo prices are where stock ran out, so
+the naive curve underestimates demand precisely where demand is largest.
+
+# 5. Forecast (Phase 5): the R money table
+
+Hold out the last 28 days; forecast with the naive fit, a drop-stockout-days
+fit, and the Tobit fit; grade all three against oracle demand. This mirrors
+docs/09's Python benchmark.
+
+```{r forecast}
+cutoff <- max(panel$date) - 27
+tr <- subset(panel, date < cutoff); te <- subset(panel, date >= cutoff)
+
+f_naive <- lm(y ~ log_price + promo_flag + dow + series, data = tr)
+f_drop  <- lm(y ~ log_price + promo_flag + dow + series,
+              data = subset(tr, !sold_out))
+f_tobit <- survreg(Surv(y, uncensored, type = "right") ~
+                     log_price + promo_flag + dow + series,
+                   data = tr, dist = "gaussian")
+
+pred <- data.frame(
+  naive = expm1(predict(f_naive, te)),
+  drop_stockouts = expm1(predict(f_drop, te)),
+  tobit = expm1(predict(f_tobit, te) + 0.5 * f_tobit$scale^2)
+)
+money <- t(sapply(pred, function(p) {
+  ed <- p - te$units_demanded; es <- p - te$units_sold   # oracle vs observable
+  c(mae_vs_demand = mean(abs(ed)), rmse_vs_demand = sqrt(mean(ed^2)),
+    bias_vs_demand = mean(ed), bias_vs_sales = mean(es))
+}))
+round(money, 3)
+```
+
+Read the last two columns together: the naive model's bias vs *sales* is small
+— it looks calibrated on every metric a real forecaster can compute — while its
+bias vs *demand* is systematically negative. That invisible gap is the thesis
+of this project; the Tobit row closes most of it using only observable
+information (`sold_out`, `units_sold`).

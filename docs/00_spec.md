@@ -1,7 +1,7 @@
 # SPEC — Demand Curve Simulator & Ideal Forecasting Dataset Generator
 
 **Status:** Phases 1–5 implemented (docs/06–09; Phase 5 = forecasting benchmark)
-**Owner:** Alex
+**Owner:** Alex Oswald
 **Purpose:** A ground-truth demand simulator that (a) simulates pricing experiments capable of
 tracing a demand curve, (b) emits an "ideal dataset" for demand forecasting research, and
 (c) grades elasticity estimators against known truth (bias / RMSE / coverage).

@@ -1,0 +1,151 @@
+---
+title: "02 — Binary logit on sessions (+ power analysis)"
+subtitle: "demand-sim · docs/03 §2, §9 · the simulator's native estimand"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+With session-level offers (price shown + buy/no-buy, including non-buyers),
+demand is a purchase probability: `P(buy) = sigma(a + b*price)`. Identification
+is clean by construction — prices are randomized across cells, so `Cov(P, u) = 0`.
+The remaining lie is aggregation: the population is a discrete mixture of
+segments, so a single pooled `b` is a misspecified compromise. The oracle
+quantifies exactly how much.
+
+# 1. Data
+
+```{r data}
+library(ggplot2)
+library(pwr)
+
+sessions <- read.csv("../data/fact_session.csv.gz")   # read.csv handles .gz
+truth_curve <- read.csv("../data/ground_truth_curves.csv")  # ORACLE
+truth_params <- read.csv("../data/truth_params.csv")        # ORACLE
+
+# pandas writes booleans as "True"/"False" — convert to logical explicitly
+sessions$purchased <- sessions$purchased == "True"
+sessions$promo_flag <- sessions$promo_flag == "True"
+
+nrow(sessions); table(sessions$cell); mean(sessions$purchased)
+```
+
+# 2. Train
+
+```{r train}
+fit <- glm(purchased ~ quoted_price + promo_flag,
+           data = sessions, family = binomial())
+summary(fit)$coefficients
+b_hat <- coef(fit)["quoted_price"]
+```
+
+# 3. Validate against the oracle
+
+Two checks. First, the raw cell means — the model-free demand curve the RCT
+buys us — against true `P_aggregate` with 95% CIs (coverage should be ~95%).
+Second, the pooled `b` against the share-weighted true `price_coef` — the gap
+is the documented aggregation bias, not an error to fix.
+
+```{r validate}
+cells <- aggregate(purchased ~ quoted_price, sessions,
+                   function(x) c(n = length(x), conv = mean(x)))
+cells <- do.call(data.frame, cells)
+names(cells) <- c("price", "n", "conv")
+cells$se <- sqrt(cells$conv * (1 - cells$conv) / cells$n)
+cells <- merge(cells,
+               truth_curve[, c("price", "P_aggregate")], by = "price")
+cells$covered <- abs(cells$conv - cells$P_aggregate) <= 1.96 * cells$se
+cells
+
+b_true <- truth_params$value[truth_params$param == "price_coef_share_weighted"]
+c(b_hat = unname(b_hat), b_true_share_weighted = b_true,
+  pct_gap = 100 * (b_hat - b_true) / abs(b_true))
+```
+
+Cluster note (CLAUDE.md): with ~3 sessions per consumer, session rows are not
+independent. Randomization here is per-session so the point estimate is fine,
+but honest SEs cluster on `consumer_id`:
+
+```{r cluster-se}
+library(sandwich); library(lmtest)
+coeftest(fit, vcov = vcovCL(fit, cluster = sessions$consumer_id))[2, ]
+```
+
+# 4. The demand curve it implies
+
+```{r curve}
+grid <- data.frame(quoted_price = seq(5, 120, 1), promo_flag = FALSE)
+grid$fitted <- predict(fit, newdata = grid, type = "response")
+
+ggplot() +
+  geom_line(data = truth_curve, aes(price, P_aggregate, color = "true curve (oracle)"),
+            linewidth = 1) +
+  geom_line(data = grid, aes(quoted_price, fitted, color = "pooled logit"),
+            linetype = "dashed", linewidth = 1) +
+  geom_pointrange(data = cells, aes(price, conv,
+                                    ymin = conv - 1.96 * se, ymax = conv + 1.96 * se,
+                                    color = "cell means (RCT)")) +
+  labs(x = "price", y = "P(buy)", color = NULL,
+       title = "Cell means trace the true curve; the pooled logit smooths through it")
+```
+
+The mixture makes the true curve non-logistic: pooled logit is too steep in the
+middle, too flat in the tails. The cell means (model-free) hug the truth — the
+argument for experiments over functional form.
+
+# 5. Power analysis (docs/04 §2)
+
+How many sessions per cell to detect a realistic price effect?
+
+```{r power}
+p1 <- 0.10; p2 <- 0.085     # +20% price at elasticity ~ -0.75
+pwr.2p.test(h = ES.h(p1, p2), sig.level = 0.05, power = 0.80)
+```
+
+~6k per arm for one contrast; a 10-cell curve needs 60k+ before segment-level
+curves multiply it again. This is why the session file has 250k rows.
+
+# 6. Forecast (Phase 5)
+
+Experiment-estimated price response, carried into a panel forecast: seasonal
+baseline from the daily panel, scaled by the logit's relative conversion at the
+posted future price. Grade against oracle demand.
+
+```{r forecast}
+panel <- read.csv("../data/fact_sales_daily.csv")
+panel$date <- as.Date(panel$date)
+panel$series <- paste(panel$product_id, panel$store_id, sep = "_")
+cutoff <- max(panel$date) - 27
+train <- subset(panel, date < cutoff)
+test  <- subset(panel, date >= cutoff)
+
+# baseline: mean sales by series x weekday (raw seasonal profile)
+train$dow <- format(train$date, "%u"); test$dow <- format(test$date, "%u")
+base <- aggregate(units_sold ~ series + dow, train, mean)
+names(base)[3] <- "base_units"
+test <- merge(test, base, by = c("series", "dow"), all.x = TRUE)
+
+# price scaling from the session logit (price response only, rescaled to
+# each series' typical price so the experiment elasticity transfers)
+ref_price <- aggregate(avg_price ~ series, train, median)
+names(ref_price)[2] <- "ref_price"
+test <- merge(test, ref_price, by = "series")
+conv <- function(p) plogis(coef(fit)[1] + coef(fit)["quoted_price"] * p)
+test$pred <- test$base_units * conv(test$avg_price) / conv(test$ref_price)
+
+err_d <- test$pred - test$units_demanded   # ORACLE target
+err_s <- test$pred - test$units_sold
+data.frame(target = c("units_demanded (oracle)", "units_sold"),
+           mae  = c(mean(abs(err_d)), mean(abs(err_s))),
+           rmse = c(sqrt(mean(err_d^2)), sqrt(mean(err_s^2))),
+           bias = c(mean(err_d), mean(err_s)))
+```
+
+A crude forecaster — but the price adjustment comes from *randomized* variation,
+which is the one ingredient the panel-only models in 01/06 can never certify.

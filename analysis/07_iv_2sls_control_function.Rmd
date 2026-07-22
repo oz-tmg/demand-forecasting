@@ -1,0 +1,136 @@
+---
+title: "07 — IV / 2SLS and the control function"
+subtitle: "demand-sim · docs/03 (parity table), docs/05 §3-§4 · rescuing the elasticity from endogenous prices"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+Same endogenous market as 04 (θ = −1.5, γ = 0.5): the pricer prices into
+demand shocks, so OLS is attenuated. The classical fixes, in their reference
+implementations: 2SLS via `AER::ivreg` (with the full diagnostic suite) and the
+two-step control function. The identifying assumption for both: the cost
+shifter `z` moves price and enters demand only through price (exclusion) —
+true here by construction, an argument to be won anywhere else.
+
+# 1. Data
+
+```{r data}
+library(AER)
+library(ggplot2)
+
+market <- read.csv("../data/endogenous_market.csv")
+truth  <- read.csv("../data/truth_params.csv")
+theta_true <- truth$value[truth$param == "theta_true"]
+head(market)
+```
+
+# 2. The problem: naive OLS
+
+```{r ols}
+ols <- lm(log_q ~ log_p + x, data = market)
+summary(ols)$coefficients["log_p", ]
+```
+
+~−1.1 against a truth of −1.5: every unit of pricing-into-shocks pushes the
+estimate toward zero (`plim = theta + Cov(P,u)/Var(P)`, docs/05 §2).
+
+# 3. Fix 1 — 2SLS
+
+```{r iv}
+iv <- ivreg(log_q ~ log_p + x | z + x, data = market)
+summary(iv, diagnostics = TRUE)
+```
+
+Read the diagnostics, always: weak-instruments F (must clear ~10 by a lot),
+Wu–Hausman (formally detects the endogeneity OLS ignored). Sargan is not
+identified here — one instrument, one endogenous regressor, zero
+overidentifying restrictions.
+
+# 4. Fix 2 — Control function
+
+First stage residual carries the endogenous part of price; including it in the
+demand equation absorbs the confound. The t-test on `v_hat` IS the endogeneity
+test. (This is the version that generalizes to the purchase logit — Petrin &
+Train 2010.)
+
+```{r cf}
+first <- lm(log_p ~ z + x, data = market)
+market$v_hat <- resid(first)
+cf <- lm(log_q ~ log_p + x + v_hat, data = market)
+summary(cf)$coefficients[c("log_p", "v_hat"), ]
+```
+
+# 5. Validate against the oracle
+
+```{r validate}
+res <- data.frame(
+  estimator = c("OLS", "2SLS", "control function"),
+  theta_hat = c(coef(ols)["log_p"], coef(iv)["log_p"], coef(cf)["log_p"]),
+  se = c(summary(ols)$coefficients["log_p", 2],
+         summary(iv)$coefficients["log_p", 2],
+         summary(cf)$coefficients["log_p", 2])
+)
+res$bias <- res$theta_hat - theta_true
+res$ci_covers_truth <- abs(res$bias) <= 1.96 * res$se
+res
+```
+
+(The CF standard error is slightly optimistic — it ignores first-stage
+estimation noise; bootstrap both steps for exact inference. 2SLS and CF point
+estimates are identical in linear models, as they should be.)
+
+# 6. The demand curve it implies
+
+```{r curve}
+p_bar <- mean(exp(market$log_p)); q_bar <- mean(exp(market$log_q))
+grid <- seq(0.6 * p_bar, 1.6 * p_bar, length.out = 80)
+curves <- rbind(
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^theta_true,       which = "truth (-1.5)"),
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^coef(ols)["log_p"], which = "OLS (attenuated)"),
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^coef(iv)["log_p"],  which = "2SLS")
+)
+ggplot(curves, aes(price, q, color = which)) + geom_line(linewidth = 1) +
+  labs(y = "quantity", color = NULL,
+       title = "The OLS curve says price cuts don't pay; the IV curve says they do")
+```
+
+# 7. Forecast (Phase 5): forecasting an intervention
+
+The forecast that matters to a pricing team is counterfactual: what happens to
+quantity if we *choose* to move price 10%? Under intervention the demand shock
+does not come along for the ride — so the causal θ is the right multiplier,
+and the OLS θ understates the response.
+
+```{r forecast}
+price_change <- 0.10
+data.frame(
+  theta_used = c("OLS", "2SLS", "truth"),
+  pct_quantity_change = 100 * ((1 + price_change)^c(
+    coef(ols)["log_p"], coef(iv)["log_p"], theta_true) - 1)
+)
+
+# and a plain holdout forecast, where the difference nearly vanishes:
+n <- nrow(market); tr <- 1:floor(0.8 * n); te <- (floor(0.8 * n) + 1):n
+gx <- lm(log_q ~ x, data = market[tr, ])
+for_theta <- function(theta) {
+  pred <- predict(gx, market[te, ]) + theta * (market$log_p[te] - mean(market$log_p[tr]))
+  c(rmse = sqrt(mean((pred - market$log_q[te])^2)))
+}
+rbind(OLS = for_theta(coef(ols)["log_p"]),
+      `2SLS` = for_theta(coef(iv)["log_p"]),
+      truth = for_theta(theta_true))
+```
+
+The holdout table is the trap in miniature: under the *observational* price
+process, the wrong θ predicts almost as well — because prices keep co-moving
+with shocks. Only under intervention (the first table) does the bias surface,
+as a ~4-point understatement of the quantity response. Prediction accuracy is
+not a test of causal validity; that is why this project scores against an
+oracle instead.

@@ -1,0 +1,4 @@
+segment,share,base_util,price_coef,promo_uplift
+price_hawks,0.45,1.2,-0.11,0.6
+mainstream,0.4,1.0,-0.045,0.3
+whales,0.15,1.5,-0.012,0.1

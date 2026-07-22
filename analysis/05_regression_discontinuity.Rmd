@@ -1,0 +1,125 @@
+---
+title: "05 — Regression discontinuity at surge-rounding cutpoints"
+subtitle: "demand-sim · docs/03 §5 · the Uber trick, with a checkable answer key"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+The pricing algorithm computes a continuous latent surge multiplier and rounds
+it to 0.1 steps. Sessions just left and right of a rounding cutpoint are
+statistically identical but face different prices — a discontinuity that
+identifies demand *locally* with no experiment and no instrument. The firm
+knows its own algorithm, so the running variable is observable. Identification
+assumption: nothing else jumps at the cutpoint (no manipulation of the latent).
+
+# 1. Data
+
+```{r data}
+library(rdrobust)
+library(rddensity)
+library(ggplot2)
+
+surge <- read.csv("../data/surge_sessions.csv.gz")
+truth <- read.csv("../data/truth_params.csv")
+cut       <- truth$value[truth$param == "rd_cut"]         # 1.25
+step      <- truth$value[truth$param == "rd_step"]        # 0.1
+base_p    <- truth$value[truth$param == "base_price"]     # 25
+true_jump <- truth$value[truth$param == "true_jump"]      # ORACLE
+
+# pandas writes booleans as "True"/"False" — convert to logical explicitly
+surge$purchased <- surge$purchased == "True"
+surge$running <- surge$surge_latent - cut
+nrow(surge); c(cut = cut, base_price = base_p, true_jump = true_jump)
+```
+
+# 2. Look first: conversion by surge level, and the rdplot
+
+```{r look}
+lev <- aggregate(purchased ~ surge_multiplier, surge, mean)
+lev$price <- base_p * lev$surge_multiplier
+lev
+
+rdplot(y = surge$purchased, x = surge$running, c = 0,
+       title = "Purchase probability around the 1.25 rounding cutpoint",
+       x.label = "latent multiplier − cutpoint", y.label = "P(buy)")
+```
+
+# 3. Train: local-linear RD with robust bias-corrected inference
+
+```{r train}
+res <- rdrobust(y = surge$purchased, x = surge$running, c = 0)
+summary(res)
+```
+
+# 4. Validate against the oracle
+
+`rdrobust`'s conventional estimate vs the true jump P(25·1.3) − P(25·1.2) from
+the demand oracle.
+
+```{r validate}
+jump_hat <- res$coef["Conventional", ]
+se_hat   <- res$se["Robust", ]
+data.frame(jump_hat = jump_hat, true_jump = true_jump,
+           bias = jump_hat - true_jump,
+           robust_ci_covers = abs(jump_hat - true_jump) <= 1.96 * se_hat)
+```
+
+Manipulation check (McCrary): the latent multiplier's density should be smooth
+through the cutpoint — the algorithm doesn't sort sessions around it.
+
+```{r density}
+summary(rddensity(surge$running, c = 0))
+```
+
+# 5. Local elasticity, and where it lives on the demand curve
+
+Convert the jump to an arc elasticity at the threshold — then be honest about
+what it is: a **LATE**, valid at 1.25× base price, not the whole curve.
+
+```{r curve}
+p_lo <- base_p * (cut - step / 2); p_hi <- base_p * (cut + step / 2)
+conv_lo <- lev$purchased[abs(lev$price - base_p * 1.2) < 1e-6]
+conv_hi <- lev$purchased[abs(lev$price - base_p * 1.3) < 1e-6]
+eps_local <- (jump_hat / mean(c(conv_lo, conv_hi))) /
+             ((p_hi - p_lo) / mean(c(p_lo, p_hi)))
+eps_local
+
+truth_curve <- read.csv("../data/ground_truth_curves.csv")   # ORACLE
+ggplot() +
+  geom_line(data = truth_curve, aes(price, P_aggregate, color = "true curve (oracle)"),
+            linewidth = 1) +
+  geom_point(data = lev, aes(price, purchased, color = "conversion by surge level"),
+             size = 2.5) +
+  geom_vline(xintercept = base_p * cut, linetype = "dotted") +
+  annotate("text", x = base_p * cut + 6, y = 0.45,
+           label = "RD identifies THIS jump only") +
+  labs(y = "P(buy)", color = NULL,
+       title = "Step-priced conversion traces the curve; RD certifies one step of it")
+```
+
+# 6. Forecast (Phase 5): the decision at the margin
+
+RD's forecast is a counterfactual, not a time series: expected demand per 1,000
+sessions if the algorithm rounds *down* vs *up* at the cutpoint. This is
+exactly the pricing decision the discontinuity licenses.
+
+```{r forecast}
+sessions_per_day <- 1000
+data.frame(
+  scenario = c("round down (price 30.0)", "round up (price 32.5)"),
+  expected_units = sessions_per_day * c(conv_lo, conv_lo + jump_hat),
+  truth          = sessions_per_day * c(conv_lo, conv_lo + true_jump)
+)
+```
+
+Extrapolating this elasticity to prices far from 1.25× base is unlicensed — for
+the whole curve you need the experiment (02) or a structural model. That
+boundary between what the design identifies and what it doesn't is the point of
+the exercise.

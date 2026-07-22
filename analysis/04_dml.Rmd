@@ -1,0 +1,135 @@
+---
+title: "04 — Double Machine Learning (PLR vs PLIV)"
+subtitle: "demand-sim · docs/03 §4, docs/05 §5 · flexible ML is not an identification strategy"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+The endogenous market (docs/05 §2): true elasticity θ = −1.5; the pricer sees
+part of the demand shock and prices into it (γ = 0.5), so `Cov(log P, u) > 0`;
+a cost shifter `z` moves price but not demand. The headline: **DML-PLR
+orthogonalizes observed confounders (x) but cannot fix simultaneity — it should
+land near the biased OLS. DML-PLIV, which uses the instrument, recovers θ.**
+
+# 1. Data
+
+```{r data}
+library(DoubleML)
+library(mlr3)
+library(mlr3learners)   # provides regr.ranger
+library(ggplot2)
+lgr::get_logger("mlr3")$set_threshold("warn")
+
+market <- read.csv("../data/endogenous_market.csv")   # observable: log_q, log_p, x, z
+truth  <- read.csv("../data/truth_params.csv")
+theta_true <- truth$value[truth$param == "theta_true"]
+head(market); theta_true
+```
+
+# 2. Baseline: naive OLS
+
+```{r ols}
+ols <- lm(log_q ~ log_p + x, data = market)
+coef(ols)["log_p"]    # expect ~ -1.1: attenuated toward zero by gamma
+```
+
+# 3. DML-PLR (no instrument) — the honest negative result
+
+```{r plr, cache=TRUE}
+set.seed(42)
+dml_plr_data <- DoubleMLData$new(market, y_col = "log_q",
+                                 d_cols = "log_p", x_cols = "x")
+plr <- DoubleMLPLR$new(dml_plr_data,
+                       ml_l = lrn("regr.ranger", num.trees = 200),
+                       ml_m = lrn("regr.ranger", num.trees = 200),
+                       n_folds = 5)
+plr$fit()
+plr$summary()
+```
+
+Random forests plus cross-fitting, and θ̂ is still ~−1.1: the ML nuisance
+models absorb `x` perfectly, but the unobserved shock `u` sits in both price
+and quantity, and no amount of flexible regression on observables removes it.
+
+# 4. DML-PLIV (with the cost-shifter instrument)
+
+```{r pliv, cache=TRUE}
+set.seed(42)
+dml_pliv_data <- DoubleMLData$new(market, y_col = "log_q", d_cols = "log_p",
+                                  x_cols = "x", z_cols = "z")
+pliv <- DoubleMLPLIV$new(dml_pliv_data,
+                         ml_l = lrn("regr.ranger", num.trees = 200),
+                         ml_m = lrn("regr.ranger", num.trees = 200),
+                         ml_r = lrn("regr.ranger", num.trees = 200),
+                         n_folds = 5)
+pliv$fit()
+pliv$summary()
+```
+
+# 5. Validate against the oracle
+
+```{r validate}
+res <- data.frame(
+  estimator = c("OLS", "DML-PLR (no IV)", "DML-PLIV (IV)"),
+  theta_hat = c(coef(ols)["log_p"], plr$coef, pliv$coef),
+  se        = c(summary(ols)$coefficients["log_p", 2], plr$se, pliv$se)
+)
+res$bias <- res$theta_hat - theta_true
+res$ci_covers_truth <- abs(res$bias) <= 1.96 * res$se
+res
+```
+
+Identification strategy, named: PLIV's assumption is instrument validity —
+`z` (a cost shock) shifts price and enters demand only through price. That is
+true here **by construction**; in the field it is the argument you must win.
+
+# 6. The demand curve it implies
+
+Constant-elasticity curves through the sample mean, under each θ̂.
+
+```{r curve}
+p_bar <- mean(exp(market$log_p)); q_bar <- mean(exp(market$log_q))
+grid <- seq(0.6 * p_bar, 1.6 * p_bar, length.out = 80)
+curve <- rbind(
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^theta_true,        which = "truth (theta = -1.5)"),
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^res$theta_hat[1],  which = "OLS / PLR (~ -1.1)"),
+  data.frame(price = grid, q = q_bar * (grid / p_bar)^res$theta_hat[3],  which = "PLIV")
+)
+ggplot(curve, aes(price, q, color = which)) + geom_line(linewidth = 1) +
+  labs(y = "quantity", color = NULL,
+       title = "The attenuated curve understates every price response")
+```
+
+# 7. Forecast (Phase 5)
+
+Forecast the last 20% of periods with each θ̂ (nuisance g(x) refit on the
+training window). The PLR/OLS curve misses hardest exactly when price moves —
+which is when a pricing team consults the forecast.
+
+```{r forecast}
+n <- nrow(market); tr <- 1:floor(0.8 * n); te <- (floor(0.8 * n) + 1):n
+gx <- lm(log_q ~ x, data = market[tr, ])   # crude g(x); theta applied structurally
+
+for_theta <- function(theta) {
+  pred <- predict(gx, market[te, ]) +
+    theta * (market$log_p[te] - mean(market$log_p[tr]))
+  err <- pred - market$log_q[te]
+  c(mae = mean(abs(err)), rmse = sqrt(mean(err^2)), bias = mean(err))
+}
+rbind("OLS/PLR theta" = for_theta(res$theta_hat[1]),
+      "PLIV theta"    = for_theta(res$theta_hat[3]),
+      "true theta"    = for_theta(theta_true))
+```
+
+In-sample fit barely separates them — the endogenous DGP generates prices that
+co-move with shocks, flattering the wrong θ. The separation shows up under
+*intervention* (a deliberate price change), which is the forecast that matters
+and the one only the causal parameter gets right. See 07 for the 2SLS/control-
+function versions of the same rescue.

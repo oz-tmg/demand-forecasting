@@ -5,3 +5,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# R / knit artifacts
+analysis/*.html
+analysis/*_files/
+analysis/*_cache/
+.Rhistory
+.RData
+.Rproj.user/

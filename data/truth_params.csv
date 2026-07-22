@@ -1,0 +1,9 @@
+dataset,param,value
+fact_session,price_coef_share_weighted,-0.0693
+endogenous_market,theta_true,-1.5
+endogenous_market,gamma,0.5
+endogenous_market,pi_instrument,0.4
+surge_sessions,rd_cut,1.25
+surge_sessions,rd_step,0.1
+surge_sessions,base_price,25.0
+surge_sessions,true_jump,-0.022427377974466256

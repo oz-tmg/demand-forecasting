@@ -1,0 +1,150 @@
+---
+title: "03 — Mixed logit (random coefficients)"
+subtitle: "demand-sim · docs/03 §3 · a continuous mixture chasing discrete segments"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+The ground truth is a finite mixture: three segments with their own price
+coefficients. Mixed logit assumes the price coefficient is *continuously*
+distributed (here Normal) across consumers — so this is a controlled
+misspecification test: how well does a normal mixing distribution approximate
+three point masses? The panel structure (repeat sessions per consumer) is what
+identifies the mixing distribution at all.
+
+Runtime note: simulated ML over 250k sessions is slow; we subsample consumers.
+Estimates are noisier but the logic is identical.
+
+# 1. Data
+
+```{r data}
+library(mlogit)
+library(ggplot2)
+
+sessions <- read.csv("../data/fact_session.csv.gz")
+seg_truth <- read.csv("../data/dim_segment_truth.csv")     # ORACLE
+truth_curve <- read.csv("../data/ground_truth_curves.csv") # ORACLE
+
+# pandas writes booleans as "True"/"False" — convert to logical explicitly
+sessions$purchased <- sessions$purchased == "True"
+sessions$promo_flag <- sessions$promo_flag == "True"
+
+set.seed(42)
+keep <- sample(unique(sessions$consumer_id), 8000)
+sub <- subset(sessions, consumer_id %in% keep)
+nrow(sub)
+```
+
+# 2. Reshape to choice format
+
+Binary choice as two alternatives: `buy` (with the quoted price) vs `nobuy`
+(price 0). `mlogit` wants long format, indexed by chooser and alternative.
+
+```{r reshape}
+long <- data.frame(
+  chid = rep(seq_len(nrow(sub)), each = 2),
+  id   = rep(sub$consumer_id, each = 2),
+  alt  = rep(c("buy", "nobuy"), nrow(sub)),
+  choice = as.vector(rbind(sub$purchased, !sub$purchased)),
+  price  = as.vector(rbind(sub$quoted_price, 0)),
+  promo  = as.vector(rbind(as.numeric(sub$promo_flag), 0))
+)
+dml <- mlogit.data(long, choice = "choice", shape = "long",
+                   alt.var = "alt", chid.var = "chid", id.var = "id")
+```
+
+# 3. Train
+
+Price coefficient random Normal across consumers; Halton draws; panel = TRUE so
+a consumer's repeated sessions share one draw.
+
+```{r train, cache=TRUE}
+m <- mlogit(choice ~ price + promo | 1, data = dml,
+            rpar = c(price = "n"), panel = TRUE, R = 300, halton = NA)
+summary(m)
+```
+
+# 4. Validate against the oracle mixture
+
+The true mixing distribution is three point masses; compare its mean/sd to the
+estimated Normal.
+
+```{r validate}
+b_mean_true <- with(seg_truth, sum(share * price_coef))
+b_sd_true   <- sqrt(with(seg_truth, sum(share * (price_coef - b_mean_true)^2)))
+
+est <- coef(m)
+data.frame(
+  quantity = c("mean(price coef)", "sd(price coef)"),
+  mixed_logit = c(est["price"], abs(est["sd.price"])),
+  truth_discrete_mixture = c(b_mean_true, b_sd_true)
+)
+seg_truth[, c("segment", "share", "price_coef")]
+```
+
+Read this as a misspecification result, not a failure: a Normal cannot place
+45% of its mass at −0.11 and 15% at −0.012, so it stretches the sd to cover the
+spread. The *mean* should be close; the shape cannot be.
+
+# 5. The demand curve it implies
+
+Average the logistic over the estimated mixing distribution (simulate draws of
+the price coefficient), against the true mixture curve.
+
+```{r curve}
+set.seed(7)
+draws <- rnorm(2000, mean = est["price"], sd = abs(est["sd.price"]))
+grid <- seq(5, 120, 1)
+P_hat <- sapply(grid, function(p) mean(plogis(est["(Intercept):buy"] + draws * p)))
+
+ggplot() +
+  geom_line(data = truth_curve, aes(price, P_aggregate, color = "true mixture (oracle)"),
+            linewidth = 1) +
+  geom_line(data = data.frame(price = grid, P = P_hat),
+            aes(price, P, color = "mixed logit (normal mixing)"),
+            linetype = "dashed", linewidth = 1) +
+  labs(y = "P(buy)", color = NULL,
+       title = "Continuous mixing approximates the discrete-segment curve")
+```
+
+The normal mixture tracks the aggregate curve far better than the pooled logit
+in 02 — heterogeneity is most of what the pooled model was missing, even with
+the wrong mixing family.
+
+# 6. Forecast (Phase 5)
+
+Same two-part pattern as 02 — seasonal baseline × relative conversion — but
+with the mixed-logit curve supplying the price response.
+
+```{r forecast}
+panel <- read.csv("../data/fact_sales_daily.csv")
+panel$date <- as.Date(panel$date)
+panel$series <- paste(panel$product_id, panel$store_id, sep = "_")
+cutoff <- max(panel$date) - 27
+train <- subset(panel, date < cutoff)
+test  <- subset(panel, date >= cutoff)
+
+train$dow <- format(train$date, "%u"); test$dow <- format(test$date, "%u")
+base <- aggregate(units_sold ~ series + dow, train, mean)
+names(base)[3] <- "base_units"
+test <- merge(test, base, by = c("series", "dow"), all.x = TRUE)
+ref <- aggregate(avg_price ~ series, train, median); names(ref)[2] <- "ref_price"
+test <- merge(test, ref, by = "series")
+
+conv_mix <- function(p) mean(plogis(est["(Intercept):buy"] + draws * p))
+test$pred <- test$base_units *
+  sapply(test$avg_price, conv_mix) / sapply(test$ref_price, conv_mix)
+
+err_d <- test$pred - test$units_demanded   # ORACLE target
+data.frame(mae = mean(abs(err_d)), rmse = sqrt(mean(err_d^2)), bias = mean(err_d))
+```
+
+Compare with 02's table: the gain over the pooled logit comes entirely from the
+heterogeneous price response bending the curve the right way at promo prices.
