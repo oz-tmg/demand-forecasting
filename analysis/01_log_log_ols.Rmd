@@ -22,8 +22,12 @@ knows the truth.
 # 1. Data
 
 ```{r data}
+library(dplyr)
 library(fixest)
 library(ggplot2)
+library(tidyr)
+library(purrr)
+library(tibble)
 
 panel <- read.csv("../data/fact_sales_daily.csv")
 dim_ps <- read.csv("../data/dim_product_store.csv")   # ORACLE: true per-series params
@@ -31,7 +35,7 @@ dim_ps <- read.csv("../data/dim_product_store.csv")   # ORACLE: true per-series 
 panel$date <- as.Date(panel$date)
 panel$week <- format(panel$date, "%G-W%V")
 panel$series <- paste(panel$product_id, panel$store_id, sep = "_")
-# pandas writes booleans as "True"/"False" — convert to logical explicitly
+
 panel$promo_flag <- panel$promo_flag == "True"
 panel$sold_out <- panel$sold_out == "True"
 str(panel[, c("date", "series", "avg_price", "promo_flag", "units_sold", "units_demanded")])
@@ -58,10 +62,10 @@ etable(fit_ols, fit_ppml, headers = c("log-OLS", "PPML"))
 
 # 3. Validate against the oracle
 
-The DGP gives every series a true constant elasticity (`dim_product_store.csv`).
-The pooled estimand is a sales-weighted blend of those; and because training on
-censored sales flattens the promo-day spikes, we also fit the same model on
-oracle demand to isolate the censoring cost.
+The Data Generating Process (DGP) gives every series a true constant elasticity 
+(`dim_product_store.csv`).  The pooled estimand is a sales-weighted blend of 
+those; and because training on censored sales flattens the promo-day spikes, we
+also fit the same model on oracle demand to isolate the censoring cost.
 
 ```{r validate}
 w <- aggregate(units_sold ~ product_id + store_id, panel, sum)
@@ -86,7 +90,138 @@ censoring clips exactly the high-demand (promo, cheap) observations, flattening
 the measured curve. The residual gap on the oracle row is aggregation across
 heterogeneous series — the pooled estimand is not any one series' elasticity.
 
-# 4. The demand curve it implies
+# 4. Choosing Oracle over Fitness
+
+```{r verifcation}
+term_price <- "log(avg_price)"
+
+## ── 1. series, oracle row, price grid (objects the plot needs) ──
+top <- names(sort(tapply(panel$units_sold, panel$series, sum), decreasing = TRUE))[1]
+p0  <- dim_ps[paste(dim_ps$product_id, dim_ps$store_id, sep = "_") == top, ]
+
+grid <- seq(0.6 * p0$base_price, 1.4 * p0$base_price, length.out = 60)
+rel  <- grid / p0$base_price
+
+sel <- panel$series == top & !panel$promo_flag
+base_units <- if ("units_demanded" %in% names(panel)) {
+  mean(panel$units_demanded[sel], na.rm = TRUE)      # ORACLE anchor — uncensored
+} else {
+  warning("units_demanded not in panel; anchoring on censored sales (level is biased low)")
+  mean(panel$units_sold[sel], na.rm = TRUE)
+}
+
+theta_true  <- p0$elasticity                          # ORACLE
+theta_ols   <- unname(coef(fit_ols)[term_price])
+theta_ppml  <- unname(coef(fit_ppml)[term_price])
+
+## ── 2. common subsample ────────────────────────────────────────────────────
+keep <- with(panel, is.finite(units_sold) & units_sold > 0 &
+                    is.finite(avg_price)  & avg_price  > 0)
+dat_c <- panel[keep, ]
+y     <- dat_c$units_sold
+n_c   <- nrow(dat_c)
+
+fit_ols_c  <- feols(log(units_sold) ~ log(avg_price) | series + dow,
+                    data = dat_c, cluster = ~series)
+fit_ppml_c <- fepois(units_sold ~ log(avg_price) | series + dow,
+                     data = dat_c, cluster = ~series)
+
+## ── 3. safe accessors ──────────────────────────────────────────────────────
+fs <- function(m, w) tryCatch(as.numeric(fitstat(m, w, simplify = TRUE)),
+                              error = function(e) NA_real_)
+np <- function(m) tryCatch(m$nparams, error = function(e) length(coef(m)))
+
+pull_theta <- function(m) {
+  est <- tryCatch(unname(coef(m)[term_price]), error = function(e) NA_real_)
+  se  <- tryCatch(unname(fixest::se(m)[term_price]), error = function(e) NA_real_)
+  ci  <- tryCatch(as.numeric(confint(m)[term_price, ]), error = function(e) c(NA, NA))
+  c(est = est, se = se, lo = ci[1], hi = ci[2])
+}
+
+## ── 4. one row per estimator ───────────────────────────────────────────────
+score <- function(fit_native, fit_common, scale, estimator) {
+  th <- pull_theta(fit_native)
+
+  if (scale == "log") {
+    eta   <- predict(fit_common, newdata = dat_c)                 # log scale
+    duan  <- mean(exp(resid(fit_common)))                         # smearing
+    yhat  <- exp(eta) * duan
+    sigma <- sqrt(sum(resid(fit_common)^2) / (nobs(fit_common) - np(fit_common)))
+    ll    <- sum(dnorm(log(y), eta, sigma, log = TRUE)) - sum(log(y))  # Jacobian → Q-space
+    k     <- np(fit_common) + 1                                   # + sigma
+  } else {
+    yhat <- predict(fit_common, newdata = dat_c, type = "response")
+    ll   <- sum(dpois(round(y), pmax(yhat, 1e-8), log = TRUE))    # quasi-likelihood
+    k    <- np(fit_common)
+  }
+
+  ok <- is.finite(yhat) & is.finite(y)
+
+  tibble(
+    estimator,
+    theta_hat   = th[["est"]],
+    se          = th[["se"]],
+    ci_lo       = th[["lo"]],
+    ci_hi       = th[["hi"]],
+    bias        = th[["est"]] - theta_true,
+    covers      = as.numeric(th[["lo"]] <= theta_true & theta_true <= th[["hi"]]),
+    n_own       = nobs(fit_native),
+    bic_native  = fs(fit_native, "bic"),
+    pr2         = fs(fit_native, "pr2"),
+    sq_cor      = fs(fit_native, "sq.cor"),
+    theta_common = unname(coef(fit_common)[term_price]),
+    n_common    = n_c,
+    rmse_lvl    = sqrt(mean((y[ok] - yhat[ok])^2)),
+    mae_lvl     = mean(abs(y[ok] - yhat[ok])),
+    mape_lvl    = mean(abs(y[ok] - yhat[ok]) / pmax(y[ok], 1)),
+    r2_lvl      = suppressWarnings(cor(y[ok], yhat[ok])^2),
+    bic_qspace  = -2 * ll + k * log(n_c)
+  )
+}
+
+compare <- bind_rows(
+  score(fit_ols,  fit_ols_c,  "log",   "log-log OLS"),
+  score(fit_ppml, fit_ppml_c, "level", "PPML")
+)
+
+## ── 5. display ─────────────────────────────────────────────────────────────
+meta <- tribble(
+  ~metric,        ~block,                            ~label,
+  "theta_hat",    "parameter vs oracle",             "theta-hat",
+  "se",           "parameter vs oracle",             "SE",
+  "ci_lo",        "parameter vs oracle",             "CI low",
+  "ci_hi",        "parameter vs oracle",             "CI high",
+  "bias",         "parameter vs oracle",             "bias (est - true)",
+  "covers",       "parameter vs oracle",             "CI covers truth",
+  "n_own",        "own-scale fit -- NOT comparable", "n (own sample)",
+  "bic_native",   "own-scale fit -- NOT comparable", "BIC (native)",
+  "pr2",          "own-scale fit -- NOT comparable", "pseudo R2",
+  "sq_cor",       "own-scale fit -- NOT comparable", "squared cor.",
+  "theta_common", "level fit, common sample -- fair","theta-hat (refit)",
+  "n_common",     "level fit, common sample -- fair","n (common)",
+  "rmse_lvl",     "level fit, common sample -- fair","RMSE (units)",
+  "mae_lvl",      "level fit, common sample -- fair","MAE (units)",
+  "mape_lvl",     "level fit, common sample -- fair","MAPE",
+  "r2_lvl",       "level fit, common sample -- fair","R2 (levels)",
+  "bic_qspace",   "level fit, common sample -- fair","BIC (Q-space)"
+)
+
+compare |>
+  mutate(across(-estimator, as.numeric)) |>
+  pivot_longer(-estimator, names_to = "metric", values_to = "value") |>
+  inner_join(meta, by = "metric") |>
+  mutate(block = factor(block, levels = unique(meta$block)),
+         label = factor(label, levels = meta$label)) |>
+  pivot_wider(id_cols = c(block, label), names_from = estimator, values_from = value) |>
+  arrange(block, label) |>
+  kable(digits = 3,
+        caption = sprintf("Oracle elasticity = %.3f | common subsample n = %d of %d rows (%.1f%% dropped as zeros)",
+                          theta_true, n_c, nrow(panel),
+                          100 * (1 - n_c / nrow(panel))))
+
+```
+
+# 5. The demand curve it implies
 
 For one high-volume series, hold covariates at baseline and trace predicted
 units over a price grid, against the true curve from the DGP parameters.
@@ -96,20 +231,24 @@ top <- names(sort(tapply(panel$units_sold, panel$series, sum), decreasing = TRUE
 p0  <- dim_ps[paste(dim_ps$product_id, dim_ps$store_id, sep = "_") == top, ]
 
 grid <- seq(0.6 * p0$base_price, 1.4 * p0$base_price, length.out = 60)
-theta_hat <- coef(fit_ppml)["log(avg_price)"]
+theta_ppml <- coef(fit_ppml)["log(avg_price)"]
+theta_ols  <- coef(fit_ols)["log(avg_price)"]
 
 base_units <- mean(panel$units_sold[panel$series == top & !panel$promo_flag])
+rel <- grid / p0$base_price
 curve <- data.frame(
   price = grid,
-  fitted = base_units * (grid / p0$base_price)^theta_hat,
-  truth  = base_units * (grid / p0$base_price)^p0$elasticity   # ORACLE
+  truth = base_units * rel^p0$elasticity,   # ORACLE
+  ppml  = base_units * rel^theta_ppml,
+  ols   = base_units * rel^theta_ols
 )
 
-ggplot(curve, aes(price)) +
-  geom_line(aes(y = truth,  color = "true curve (oracle)"), linewidth = 1) +
-  geom_line(aes(y = fitted, color = "PPML fitted"), linetype = "dashed", linewidth = 1) +
+ggplot(curve, aes(y=price)) +
+  geom_line(aes(x = truth,  color = "true curve (oracle)"), linewidth = 1) +
+  geom_line(aes(x = ppml, color = "PPML fitted"), linetype = "dashed", linewidth = 1) +
+  geom_line(aes(x = ols, color = "OLS fitted"), linetype = "dashed", linewidth = 1) +
   labs(title = paste("Series", top, "— fitted vs true demand curve"),
-       y = "expected units/day", color = NULL)
+       x = "expected units/day", color = NULL)
 ```
 
 # 5. Forecast (Phase 5)
