@@ -1,8 +1,8 @@
 """Export the datasets the analysis/ R Markdown walk-throughs consume.
 
-Seed-reproducible (CLAUDE.md invariant). Observable and oracle content are
-written to SEPARATE files so the .Rmds can be honest about which side of the
-boundary each object sits on:
+Seed-reproducible. Observable and oracle content are written to SEPARATE 
+files so the .Rmds can be honest about which side of the boundary each 
+object sits on:
 
   observable (estimator inputs)          oracle (scoring-only)
   ------------------------------         --------------------------------
