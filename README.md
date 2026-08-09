@@ -77,12 +77,31 @@ demand-sim/
 
 ## Quickstart
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) against a committed
+`uv.lock` (Python ≥3.11). `uv sync` builds `.venv`; `uv run` executes inside it — no
+manual activation needed.
+
 ```bash
-pip install numpy pandas scipy statsmodels
-python examples/quickstart.py
-python scripts/generate_phase2_dataset.py   # regenerate data/ (seed 42)
-python -m pytest tests/ -q
+uv sync                                     # core deps (numpy, pandas, scipy, statsmodels)
+uv run python examples/quickstart.py
+uv run python scripts/generate_phase2_dataset.py   # regenerate data/ (seed 42)
+uv run pytest tests/ -q
 ```
+
+Core phases 1–5 run on the base deps. The heavier stacks live behind optional extras —
+pull them only when you need them:
+
+```bash
+uv sync --extra estimators     # DoubleML, EconML, linearmodels, rdrobust, pyfixest, lightgbm
+uv sync --extra forecasting    # GluonTS, Chronos
+uv sync --extra dev            # pytest
+uv sync --all-extras           # everything at once
+```
+
+Prefer pip? `pyproject.toml` uses a standard setuptools backend, so
+`pip install -e ".[estimators,forecasting,dev]"` also works. The R walk-throughs in
+`analysis/` are a separate toolchain (VS Code + rmarkdown; `pandoc` required) — not part
+of the Python environment.
 
 Sample output (default 3-segment market, 100k sessions, 7 randomized price cells):
 
