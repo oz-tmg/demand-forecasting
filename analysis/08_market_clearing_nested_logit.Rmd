@@ -1,0 +1,205 @@
+---
+title: "08 — Nested logit through a market that clears"
+subtitle: "demand-sim · docs/10 (Phase 6) · price is an equilibrium outcome, not a treatment"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
+```
+
+Every other walk-through recovers a parameter from a price the studio *set*. Here
+the price is what a buyer and a seller agreed on — an **equilibrium outcome**. You
+cannot randomize it, only the things that shift it, and (price, quantity) pairs
+alone trace neither curve (the simultaneity problem). The data is a panel of
+weekly market equilibria over differentiated goods (cards) grouped into nests by
+quality × role; demand is a nested logit, so the object we report is a
+**diversion matrix**, not a scalar elasticity.
+
+Identification comes from the content calendar: a **pack promo** injects stock (a
+supply shifter — traces demand) and an **SBC** raises a card's utility (a demand
+shifter). Randomizing which cards each event touches turns them into instruments.
+Estimator: the Berry (1994) inversion, by OLS (biased) and by 2SLS (identified),
+with standard errors **clustered by week** — one week's goods trade against a
+shared denominator, so they are not independent.
+
+# 1. Data
+
+```{r data}
+library(AER)        # ivreg
+library(sandwich)   # vcovCL — cluster-robust
+library(lmtest)     # coeftest
+library(ggplot2)
+
+m <- read.csv("../data/market_panel.csv")     # observable: one row per good x week
+truth <- read.csv("../data/market_truth.csv")
+alpha_true  <- truth$value[truth$param == "alpha_true"]
+lambda_true <- truth$value[truth$param == "lambda_true"]
+
+# Berry LHS and the within-nest share regressor
+m$y      <- log(m$s_j) - log(m$s0)
+m$ln_sjg <- log(m$s_jg)
+
+# BLP-style rival instruments: same-nest rivals hit by a promo / SBC this week
+m$nest_promo <- ave(m$promo, m$week, m$nest, FUN = sum) - m$promo
+m$nest_sbc   <- ave(m$sbc,   m$week, m$nest, FUN = sum) - m$sbc
+head(m[, c("week", "good", "nest", "logp", "q", "s_j", "promo", "sbc")])
+```
+
+The Berry inversion is linear in the parameters:
+
+$$\ln s_j - \ln s_0 \;=\; b_0 + \beta x_j + c\,\text{SBC}_j \;-\;\alpha\,\log p_j \;+\;(1-\lambda)\ln s_{j\mid g} \;+\;\xi_j$$
+
+Two regressors are endogenous: $\log p_j$ (price is an equilibrium outcome,
+correlated with the unobserved demand shock $\xi_j$) and $\ln s_{j\mid g}$ (a
+share, mechanically correlated with $\xi_j$). Recover $\alpha = -\,\text{coef}(\log p)$
+and $\lambda = 1 - \text{coef}(\ln s_{j\mid g})$.
+
+# 2. Why the raw scatter traces nothing
+
+```{r scatter}
+ggplot(m, aes(logp, log(q), color = factor(promo))) +
+  geom_point(alpha = 0.15, size = 0.6) +
+  scale_color_manual(values = c("0" = "grey60", "1" = "#c0392b"),
+                     labels = c("no promo", "pack promo"), name = NULL) +
+  labs(x = "log price", y = "log quantity",
+       title = "Equilibria, not a demand curve — until a shifter separates them")
+```
+
+Promo weeks (a supply shock) push a good down-and-right along its demand curve;
+demand shocks push up-and-right along supply. The cloud is the mixture. Only an
+instrument recovers a slope from it.
+
+# 3. The problem: naive OLS Berry inversion
+
+```{r ols}
+ols <- lm(y ~ x + sbc + logp + ln_sjg, data = m)
+ols_cl <- coeftest(ols, vcov = vcovCL, cluster = m$week)   # cluster by week
+alpha_ols <- -coef(ols)["logp"]; lam_ols <- 1 - coef(ols)["ln_sjg"]
+c(alpha_ols = alpha_ols, lam_ols = lam_ols)
+```
+
+The demand shock moves both price and the shares, so the price coefficient is
+pulled hard toward zero — the market version of "we raised prices and sold more."
+
+# 4. The fix — 2SLS
+
+Instrument the two endogenous regressors with the excluded shifters: own **promo**
+(a pure supply shock, excluded from demand) plus the same-nest rival promo / SBC
+counts (they reach good $j$ only through equilibrium prices).
+
+```{r iv}
+iv <- ivreg(y ~ x + sbc + logp + ln_sjg |
+              x + sbc + promo + nest_promo + nest_sbc, data = m)
+iv_cl <- coeftest(iv, vcov = vcovCL, cluster = m$week)   # cluster by week
+alpha_iv <- -coef(iv)["logp"]; lam_iv <- 1 - coef(iv)["ln_sjg"]
+iv_cl[c("logp", "ln_sjg"), ]
+```
+
+```{r diagnostics}
+# first stage strength for the price equation (weak-IV guard: clear ~10 by a lot)
+summary(iv, diagnostics = TRUE)$diagnostics
+```
+
+# 5. Validate against the oracle
+
+```{r validate}
+se_alpha_iv <- iv_cl["logp", "Std. Error"]        # SE of coef(logp) == SE of alpha
+res <- data.frame(
+  estimator = c("OLS", "2SLS"),
+  alpha_hat = c(alpha_ols, alpha_iv),
+  lam_hat   = c(lam_ols,   lam_iv)
+)
+res$alpha_bias <- res$alpha_hat - alpha_true
+res$lam_bias   <- res$lam_hat   - lambda_true
+res$ci_covers_alpha <- abs(res$alpha_hat - alpha_true) <=
+  1.96 * c(ols_cl["logp", "Std. Error"], se_alpha_iv)
+res
+```
+
+OLS is badly attenuated on $\alpha$; 2SLS recovers both $\alpha$ (truth
+`r round(alpha_true,2)`) and $\lambda$ (truth `r round(lambda_true,2)`) and its
+95% CI covers the truth. $\lambda < 1$ *is* the substitution structure — the next
+section makes it a matrix.
+
+# 6. The object that matters: the diversion matrix
+
+With thousands of differentiated goods the own-price elasticity of one card is
+close to meaningless — buyers choose among substitutes. The reported object is the
+**diversion matrix**: of the demand a good loses when its price rises, where does
+it go. We evaluate the true and recovered demand systems at one common set of
+reference prices (the oracle `market_reference.csv`, cleared at truth), so the
+comparison isolates demand-parameter error.
+
+```{r nl-helpers}
+# nested-logit shares and a numeric diversion matrix — the same algebra as
+# src/demand_sim/market.py, kept raw here so it can be read inline.
+nl_shares <- function(delta, nest, lam) {
+  groups <- sort(unique(nest))
+  Dgl <- sapply(groups, function(g) sum(exp(delta[nest == g] / lam))^lam)
+  denom <- 1 + sum(Dgl)
+  s <- numeric(length(delta)); sjg <- numeric(length(delta))
+  for (i in seq_along(groups)) {
+    idx <- nest == groups[i]
+    e <- exp(delta[idx] / lam); Dg <- sum(e)
+    s[idx]   <- (e / Dg) * (Dgl[i] / denom)
+    sjg[idx] <- e / Dg
+  }
+  list(s = s, s0 = 1 / denom, sjg = sjg)
+}
+
+diversion <- function(delta, nest, lam, alpha, eps = 1e-4) {
+  base <- nl_shares(delta, nest, lam)$s
+  J <- length(delta); D <- matrix(0, J, J)
+  for (j in seq_len(J)) {
+    d2 <- delta; d2[j] <- d2[j] - alpha * eps       # a small price bump on j
+    b <- nl_shares(d2, nest, lam)$s
+    loss <- base[j] - b[j]; g <- b - base; g[j] <- 0
+    if (loss > 0) D[j, ] <- g / loss
+  }
+  D
+}
+```
+
+```{r diversion}
+ref <- read.csv("../data/market_reference.csv")     # ORACLE reference prices
+delta_true <- ref$mean_util - alpha_true * ref$logp_ref
+delta_hat  <- ref$mean_util - alpha_iv   * ref$logp_ref
+D_true <- diversion(delta_true, ref$nest, lambda_true, alpha_true)
+D_hat  <- diversion(delta_hat,  ref$nest, lam_iv,      alpha_iv)
+
+off  <- !diag(nrow(D_true))
+same <- outer(ref$nest, ref$nest, `==`)
+c(diversion_mae = mean(abs(D_true[off] - D_hat[off])),
+  within_nest_share_true = sum(D_true[off & same]) / sum(D_true[off]),
+  within_nest_share_hat  = sum(D_hat[off & same])  / sum(D_hat[off]))
+```
+
+```{r diversion-heatmap, fig.height=5}
+long <- expand.grid(loses = seq_len(nrow(D_hat)), gains = seq_len(ncol(D_hat)))
+long$diversion <- as.vector(D_hat)   # R is column-major: row (loses) varies fastest
+ggplot(long, aes(gains, loses, fill = diversion)) + geom_tile() +
+  scale_fill_viridis_c(option = "magma") + scale_y_reverse() +
+  coord_equal() +
+  labs(title = "Recovered diversion matrix — mass concentrates within nests",
+       x = "demand gained by card", y = "card that raised its price")
+```
+
+Substitution is fierce inside a nest and weak across — the block structure is
+visible, and the recovered within-nest share matches the oracle to a fraction of a
+percent. That is the payoff the note asked for: not a scalar elasticity argued for
+from a scatter, but a substitution structure recovered *through a market that
+clears*, and graded against a truth we generated.
+
+# 7. Note — no Phase 5 forecast here
+
+The other walk-throughs end with a demand forecast. Phase 6 estimates a *static
+demand system*, so the terminal object is the diversion matrix, not a time-series
+forecast. The forecasting arc resumes when the order book lands (docs/10 §6): the
+listing-level survival curve is a demand read the aggregated panel cannot give,
+and bunching at price bands is a second censoring channel on top of the inventory
+censoring of Phases 2 and 5.
