@@ -12,3 +12,8 @@ analysis/*_cache/
 .Rhistory
 .RData
 .Rproj.user/
+# generated datasets — reproducible from seed via scripts/ (see README).
+# The seed IS the dataset; regenerate rather than track (avoids history bloat,
+# esp. the timestamped .csv.gz which mints a new blob on every regen).
+data/*
+!data/.gitkeep
