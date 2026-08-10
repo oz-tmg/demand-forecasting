@@ -103,6 +103,19 @@ Prefer pip? `pyproject.toml` uses a standard setuptools backend, so
 `analysis/` are a separate toolchain (VS Code + rmarkdown; `pandoc` required) — not part
 of the Python environment.
 
+### Data
+
+`data/` is generated, not tracked in git — the seed *is* the dataset. Rebuild both
+dataset families (deterministic under seed 42) with:
+
+```bash
+uv run python scripts/generate_phase2_dataset.py     --seed 42 --outdir data
+uv run python scripts/generate_analysis_datasets.py  --seed 42 --outdir data
+```
+
+The R walk-throughs in `analysis/` read these CSVs, so run both generators once before
+knitting.
+
 Sample output (default 3-segment market, 100k sessions, 7 randomized price cells):
 
 ```
