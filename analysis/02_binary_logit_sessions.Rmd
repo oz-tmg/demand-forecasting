@@ -12,6 +12,7 @@ output:
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
 ```
 
+
 With session-level offers (price shown + buy/no-buy, including non-buyers),
 demand is a purchase probability: `P(buy) = sigma(a + b*price)`. Identification
 is clean by construction — prices are randomized across cells, so `Cov(P, u) = 0`.
@@ -25,6 +26,13 @@ quantifies exactly how much.
 library(ggplot2)
 library(pwr)
 
+# for testing purposes
+# Anchor wd to <repo>/analysis on any machine: here() finds the project root
+# via the .Rproj / .git marker, so the ../data reads below resolve regardless
+# of where the repo is cloned or which editor runs the chunks.
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+setwd(here::here("analysis"))
+
 sessions <- read.csv("../data/fact_session.csv.gz")   # read.csv handles .gz
 truth_curve <- read.csv("../data/ground_truth_curves.csv")  # ORACLE
 truth_params <- read.csv("../data/truth_params.csv")        # ORACLE
@@ -36,6 +44,7 @@ sessions$promo_flag <- sessions$promo_flag == "True"
 nrow(sessions); table(sessions$cell); mean(sessions$purchased)
 ```
 
+
 # 2. Train
 
 ```{r train}
@@ -44,6 +53,7 @@ fit <- glm(purchased ~ quoted_price + promo_flag,
 summary(fit)$coefficients
 b_hat <- coef(fit)["quoted_price"]
 ```
+
 
 # 3. Validate against the oracle
 
@@ -68,6 +78,7 @@ c(b_hat = unname(b_hat), b_true_share_weighted = b_true,
   pct_gap = 100 * (b_hat - b_true) / abs(b_true))
 ```
 
+
 Cluster note (CLAUDE.md): with ~3 sessions per consumer, session rows are not
 independent. Randomization here is per-session so the point estimate is fine,
 but honest SEs cluster on `consumer_id`:
@@ -76,6 +87,7 @@ but honest SEs cluster on `consumer_id`:
 library(sandwich); library(lmtest)
 coeftest(fit, vcov = vcovCL(fit, cluster = sessions$consumer_id))[2, ]
 ```
+
 
 # 4. The demand curve it implies
 
@@ -95,6 +107,7 @@ ggplot() +
        title = "Cell means trace the true curve; the pooled logit smooths through it")
 ```
 
+
 The mixture makes the true curve non-logistic: pooled logit is too steep in the
 middle, too flat in the tails. The cell means (model-free) hug the truth — the
 argument for experiments over functional form.
@@ -107,6 +120,7 @@ How many sessions per cell to detect a realistic price effect?
 p1 <- 0.10; p2 <- 0.085     # +20% price at elasticity ~ -0.75
 pwr.2p.test(h = ES.h(p1, p2), sig.level = 0.05, power = 0.80)
 ```
+
 
 ~6k per arm for one contrast; a 10-cell curve needs 60k+ before segment-level
 curves multiply it again. This is why the session file has 250k rows.
@@ -146,6 +160,7 @@ data.frame(target = c("units_demanded (oracle)", "units_sold"),
            rmse = c(sqrt(mean(err_d^2)), sqrt(mean(err_s^2))),
            bias = c(mean(err_d), mean(err_s)))
 ```
+
 
 A crude forecaster — but the price adjustment comes from *randomized* variation,
 which is the one ingredient the panel-only models in 01/06 can never certify.

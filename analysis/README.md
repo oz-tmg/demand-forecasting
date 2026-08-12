@@ -1,11 +1,15 @@
 # analysis/ — R Markdown estimator walk-throughs
 
 One `.Rmd` per estimator from `docs/03_models_python_r.md` (the two Python-only
-pillars — BLP and deep/probabilistic forecasting — are excluded). Each file is
-deliberately **raw**: minimal helper functions, section-by-section, so the code
-and its logic can be reviewed inline. Every file follows the same arc:
+pillars — full BLP and deep/probabilistic forecasting — are excluded), plus `08`,
+the Phase 6 addition from `docs/10`. Each file is deliberately **raw**: minimal
+helper functions, section-by-section, so the code and its logic can be reviewed
+inline. Files `01`–`07` follow the same arc:
 
 data → train → validate against the oracle → plot the demand curve → forecast demand (Phase 5)
+
+`08` shares the first three steps but ends at a **diversion matrix** instead of a
+forecast — Phase 6 estimates a static demand system, not a time series.
 
 | File | Estimator | Data | Headline |
 |---|---|---|---|
@@ -16,6 +20,7 @@ data → train → validate against the oracle → plot the demand curve → for
 | `05_regression_discontinuity.Rmd` | RD (`rdrobust`, `rddensity`) | surge sessions | one certified step of the curve; LATE, not ATE |
 | `06_tobit_censored.Rmd` | per-row Tobit (`survival::survreg`) | daily panel | the R money table — sales-calibrated, demand-wrong |
 | `07_iv_2sls_control_function.Rmd` | 2SLS (`AER::ivreg`) + control function | endogenous market | prediction accuracy is not causal validity |
+| `08_market_clearing_nested_logit.Rmd` | nested-logit Berry inversion, OLS vs 2SLS (`AER::ivreg`, cluster-robust) | market panel | price is an equilibrium outcome; only a shifter identifies the system; report a diversion matrix, not a scalar |
 
 ## Data
 
@@ -27,10 +32,12 @@ python scripts/generate_analysis_datasets.py   # sessions, surge, endogenous, tr
 ```
 
 Observable files (estimator inputs): `fact_sales_daily.csv`,
-`fact_session.csv.gz`, `surge_sessions.csv.gz`, `endogenous_market.csv`.
+`fact_session.csv.gz`, `surge_sessions.csv.gz`, `endogenous_market.csv`,
+`market_panel.csv`.
 Oracle files (used ONLY in validation sections and truth overlays):
-`ground_truth_curves.csv`, `dim_segment_truth.csv`, `truth_params.csv`, and the
-oracle columns of the panel. Keep that boundary intact if you extend these.
+`ground_truth_curves.csv`, `dim_segment_truth.csv`, `truth_params.csv`,
+`market_truth.csv`, `market_reference.csv`, and the oracle columns of the panel.
+Keep that boundary intact if you extend these.
 
 ## Setup (VS Code)
 

@@ -9,7 +9,8 @@ object sits on:
   fact_session.csv                       ground_truth_curves.csv
   surge_sessions.csv                     dim_segment_truth.csv
   endogenous_market.csv                  truth_params.csv
-  fact_sales_daily.csv (Phase 2 CLI)
+  fact_sales_daily.csv (Phase 2 CLI)     market_truth.csv
+  market_panel.csv                       market_reference.csv
 
 Usage:  python scripts/generate_analysis_datasets.py [--seed 42] [--outdir data]
 """
@@ -26,10 +27,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from dataclasses import replace  # noqa: E402
 
-from demand_sim import (EndogenousConfig, default_config, demand_curve,  # noqa: E402
-                        run_simulation, run_surge_sessions,
-                        simulate_endogenous_market, true_elasticity,
-                        true_rd_jump)
+from demand_sim import (EndogenousConfig, MarketConfig, default_config,  # noqa: E402
+                        demand_curve, reference_market, run_simulation,
+                        run_surge_sessions, simulate_endogenous_market,
+                        simulate_market, true_elasticity, true_rd_jump)
 
 RD_BASE_PRICE = 25.0
 RD_CUT = 1.25
@@ -77,6 +78,25 @@ def main() -> None:
     } for s in cfg.segments]).to_csv(outdir / "dim_segment_truth.csv",
                                      index=False)
 
+    # --- Phase 6 market (docs/10): weekly equilibria from a clearing market.
+    # Observable panel drops the demand shock xi (oracle); rival instruments are
+    # rebuilt in R from nest x week sums so the .Rmd stays self-contained.
+    mkt_cfg = MarketConfig(seed=args.seed)
+    market = simulate_market(mkt_cfg)
+    market.drop(columns=["xi_true"]).to_csv(outdir / "market_panel.csv",
+                                             index=False)
+    # ORACLE: the reference market (mean utility + clearing price at truth) that
+    # both the true and recovered diversion matrices are evaluated at.
+    reference_market(mkt_cfg).to_csv(outdir / "market_reference.csv", index=False)
+    # ORACLE: the structural truths the .Rmd grades alpha / lambda against.
+    pd.DataFrame([
+        {"dataset": "market_panel", "param": "alpha_true", "value": mkt_cfg.alpha},
+        {"dataset": "market_panel", "param": "lambda_true", "value": mkt_cfg.lam},
+        {"dataset": "market_panel", "param": "beta_x", "value": mkt_cfg.beta_x},
+        {"dataset": "market_panel", "param": "supply_elasticity",
+         "value": mkt_cfg.supply_elasticity},
+    ]).to_csv(outdir / "market_truth.csv", index=False)
+
     # --- ORACLE: scalar truths every .Rmd grades against (scoring-only)
     b_mix = float(np.average([s.price_coef for s in cfg.segments],
                              weights=[s.share for s in cfg.segments]))
@@ -97,8 +117,9 @@ def main() -> None:
     ]).to_csv(outdir / "truth_params.csv", index=False)
 
     for f in ("fact_session.csv.gz", "surge_sessions.csv.gz",
-              "endogenous_market.csv", "ground_truth_curves.csv",
-              "dim_segment_truth.csv", "truth_params.csv"):
+              "endogenous_market.csv", "market_panel.csv", "market_reference.csv",
+              "ground_truth_curves.csv", "dim_segment_truth.csv",
+              "truth_params.csv", "market_truth.csv"):
         print(f"{f}: {len(pd.read_csv(outdir / f)):,} rows")
 
 

@@ -22,8 +22,12 @@ from .interference import (InterferenceConfig, apply_capacity, pool_capacity,
                            interference_design_bias)
 from .forecast import (ForecastBenchmarkConfig, run_forecast_benchmark,
                        OBSERVABLE_MODELS)
+from .market import (MarketConfig, simulate_market, nested_logit_shares,
+                     clear_market, diversion_matrix, fit_berry_ols,
+                     fit_berry_2sls, score_diversion, market_scorecard,
+                     reference_market, oracle_diversion)
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "SegmentConfig", "SimulationConfig", "default_config",
     "demand_curve", "true_elasticity", "consumer_surplus",
@@ -42,4 +46,7 @@ __all__ = [
     "InterferenceConfig", "apply_capacity", "pool_capacity",
     "run_interference_experiment", "interference_design_bias",
     "ForecastBenchmarkConfig", "run_forecast_benchmark", "OBSERVABLE_MODELS",
+    "MarketConfig", "simulate_market", "nested_logit_shares", "clear_market",
+    "diversion_matrix", "fit_berry_ols", "fit_berry_2sls", "score_diversion",
+    "market_scorecard", "reference_market", "oracle_diversion",
 ]

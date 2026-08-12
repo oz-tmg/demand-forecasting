@@ -2,7 +2,7 @@
 title: "01 — Log-log OLS / FE panels (fixest)"
 subtitle: "demand-sim · docs/03 §1 · the naive benchmark everyone starts with"
 output:
-  html_document:
+  markdown:
     toc: true
     toc_depth: 2
     theme: flatly
@@ -11,6 +11,7 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 4.5)
 ```
+
 
 Model: `log Q = alpha + theta * log P + X gamma + u`, theta = elasticity.
 Identification here rests on price variation coming only from promo discounts,
@@ -28,6 +29,14 @@ library(ggplot2)
 library(tidyr)
 library(purrr)
 library(tibble)
+library(kableExtra)
+
+# for testing purposes
+# Anchor wd to <repo>/analysis on any machine: here() finds the project root
+# via the .Rproj / .git marker, so the ../data reads below resolve regardless
+# of where the repo is cloned or which editor runs the chunks.
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+setwd(here::here("analysis"))
 
 panel <- read.csv("../data/fact_sales_daily.csv")
 dim_ps <- read.csv("../data/dim_product_store.csv")   # ORACLE: true per-series params
@@ -40,6 +49,7 @@ panel$promo_flag <- panel$promo_flag == "True"
 panel$sold_out <- panel$sold_out == "True"
 str(panel[, c("date", "series", "avg_price", "promo_flag", "units_sold", "units_demanded")])
 ```
+
 
 Observable columns feed the model; `units_demanded`, `lost_sales`, `lambda_true`
 are oracle and appear only in validation.
@@ -59,6 +69,7 @@ fit_ppml <- fepois(units_sold ~ log(avg_price) + promo_flag | series + week,
 
 etable(fit_ols, fit_ppml, headers = c("log-OLS", "PPML"))
 ```
+
 
 # 3. Validate against the oracle
 
@@ -84,6 +95,7 @@ data.frame(
   theta_true_weighted = theta_true_weighted
 ) |> transform(bias = theta_hat - theta_true_weighted)
 ```
+
 
 The sales-trained coefficients sit closer to zero than the demand-trained one:
 censoring clips exactly the high-demand (promo, cheap) observations, flattening
@@ -218,8 +230,8 @@ compare |>
         caption = sprintf("Oracle elasticity = %.3f | common subsample n = %d of %d rows (%.1f%% dropped as zeros)",
                           theta_true, n_c, nrow(panel),
                           100 * (1 - n_c / nrow(panel))))
-
 ```
+
 
 # 5. The demand curve it implies
 
@@ -251,6 +263,7 @@ ggplot(curve, aes(y=price)) +
        x = "expected units/day", color = NULL)
 ```
 
+
 # 5. Forecast (Phase 5)
 
 Hold out the last 28 days, forecast with the PPML fit, grade against oracle
@@ -273,6 +286,7 @@ data.frame(
   bias = c(mean(err_d), mean(err_s))
 )
 ```
+
 
 The bias against true demand is more negative than against sales: the model
 inherits the censoring in its training target. The Tobit walk-through (06) and
