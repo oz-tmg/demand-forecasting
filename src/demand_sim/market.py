@@ -109,6 +109,46 @@ def nested_logit_shares(delta: np.ndarray, nest_id: np.ndarray, lam: float):
     return s_j, float(s0), s_jg
 
 
+def draw_nested_logit_utilities(delta: np.ndarray, nest_id: np.ndarray, lam: float,
+                                n: int, rng: np.random.Generator):
+    """Draw `n` individual random-utility vectors from the nested logit that
+    `nested_logit_shares` describes, so agent-level simulators can give each agent
+    their own utilities (market-sim task 2.2).
+
+        u_ij = delta_j + eps_ij,  u_i0 = eps_i0   (outside good, delta_0 = 0)
+
+    eps follows the nested-logit GEV distribution: standard Gumbel marginals, independent
+    across nests and from the outside good, and correlated within a nest with
+    dissimilarity `lam`. Construction (positive-stable / Gumbel-copula representation):
+
+        eps_ij = lam * g_ij + lam * log V_ig,   g_ij ~ Gumbel(0, 1),  V_ig ~ PS(lam)
+
+    where PS(lam) is positive stable with Laplace transform exp(-s**lam), drawn with
+    Kanter's (1975) formula. Then P(eps_g <= x) = exp(-(sum_j exp(-x_j/lam))**lam),
+    the nest's GEV term. The argmax over [u_i0, u_i1..J] reproduces
+    `nested_logit_shares` (tests/test_phase6.py checks the choice frequencies).
+
+    Returns (U, u0): U is n x J, u0 has length n.
+    """
+    if not 0.0 < lam <= 1.0:
+        raise ValueError("lam must be in (0, 1]")
+    delta = np.asarray(delta, dtype=float)
+    nest_id = np.asarray(nest_id)
+    nests, inv = np.unique(nest_id, return_inverse=True)
+    g = rng.gumbel(0.0, 1.0, (n, len(delta)))
+    if lam == 1.0:
+        log_v = np.zeros((n, len(nests)))                  # independent logit errors
+    else:
+        u = rng.uniform(0.0, 1.0, (n, len(nests))) * np.pi
+        w = rng.exponential(1.0, (n, len(nests)))
+        # Kanter: V = sin(lam u)/sin(u)^(1/lam) * (sin((1-lam) u)/w)^((1-lam)/lam)
+        log_v = (np.log(np.sin(lam * u)) - np.log(np.sin(u)) / lam
+                 + (1.0 - lam) / lam * (np.log(np.sin((1.0 - lam) * u)) - np.log(w)))
+    eps = lam * g + lam * log_v[:, inv]
+    u0 = rng.gumbel(0.0, 1.0, n)
+    return delta + eps, u0
+
+
 def diversion_matrix(delta: np.ndarray, nest_id: np.ndarray, lam: float,
                      alpha: float, eps: float = 1e-4) -> np.ndarray:
     """Numeric diversion matrix D[j,k]: of the demand good j loses when its price
