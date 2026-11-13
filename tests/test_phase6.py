@@ -122,3 +122,49 @@ def test_scorecard_ols_biased_2sls_unbiased_and_covers():
     assert abs(card.loc["2sls", "mean_bias"]) < 0.05
     assert abs(card.loc["ols", "mean_bias"]) > 0.3
     assert card.loc["2sls", "coverage_95"] >= 0.7    # near-nominal (lenient for n_reps)
+
+
+# ------------------------------------------------- agent-level utility sampler
+from demand_sim.market import draw_nested_logit_utilities  # noqa: E402
+
+
+def _choice_freqs(delta, nest, lam, n=400_000, seed=0):
+    U, u0 = draw_nested_logit_utilities(delta, nest, lam, n, np.random.default_rng(seed))
+    choice = np.argmax(np.column_stack([u0, U]), axis=1)   # 0 = outside good
+    return np.bincount(choice, minlength=len(delta) + 1) / n
+
+
+def test_sampled_choices_reproduce_nested_logit_shares():
+    """Simulated argmax choices match the closed-form shares for several lambdas."""
+    delta = np.array([1.0, 0.4, -0.2, 0.8, 0.0, -0.5])
+    nest = np.array([0, 0, 0, 1, 1, 2])
+    for lam in (0.25, 0.55, 0.9, 1.0):
+        s_j, s0, _ = nested_logit_shares(delta, nest, lam)
+        freq = _choice_freqs(delta, nest, lam)
+        p = np.concatenate([[s0], s_j])
+        se = np.sqrt(p * (1 - p) / 400_000)
+        assert np.all(np.abs(freq - p) < 4.5 * se), (lam, freq - p)
+
+
+def test_sampler_marginals_are_standard_gumbel_and_nests_correlate():
+    rng = np.random.default_rng(1)
+    delta = np.zeros(3)
+    U, u0 = draw_nested_logit_utilities(delta, np.array([0, 0, 1]), 0.3, 300_000, rng)
+    euler = 0.5772156649
+    assert np.allclose(U.mean(axis=0), euler, atol=0.01) and abs(u0.mean() - euler) < 0.01
+    assert np.allclose(U.std(axis=0), np.pi / np.sqrt(6), atol=0.01)
+    c = np.corrcoef(U.T)
+    assert c[0, 1] > 0.8 and abs(c[0, 2]) < 0.01      # 1 - lam^2 = 0.91 within a nest
+
+
+def test_sampler_is_seeded_and_validates_lambda():
+    d, g = np.array([0.5, 0.1]), np.array([0, 0])
+    a = draw_nested_logit_utilities(d, g, 0.5, 10, np.random.default_rng(42))
+    b = draw_nested_logit_utilities(d, g, 0.5, 10, np.random.default_rng(42))
+    assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1])
+    for bad in (0.0, 1.2):
+        try:
+            draw_nested_logit_utilities(d, g, bad, 10, np.random.default_rng(0))
+        except ValueError:
+            continue
+        raise AssertionError(f"lam={bad} accepted")

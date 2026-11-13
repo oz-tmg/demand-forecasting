@@ -23,6 +23,7 @@ from .interference import (InterferenceConfig, apply_capacity, pool_capacity,
 from .forecast import (ForecastBenchmarkConfig, run_forecast_benchmark,
                        OBSERVABLE_MODELS)
 from .market import (MarketConfig, simulate_market, nested_logit_shares,
+                     draw_nested_logit_utilities,
                      clear_market, diversion_matrix, fit_berry_ols,
                      fit_berry_2sls, score_diversion, market_scorecard,
                      reference_market, oracle_diversion)
@@ -47,6 +48,7 @@ __all__ = [
     "run_interference_experiment", "interference_design_bias",
     "ForecastBenchmarkConfig", "run_forecast_benchmark", "OBSERVABLE_MODELS",
     "MarketConfig", "simulate_market", "nested_logit_shares", "clear_market",
+    "draw_nested_logit_utilities",
     "diversion_matrix", "fit_berry_ols", "fit_berry_2sls", "score_diversion",
     "market_scorecard", "reference_market", "oracle_diversion",
 ]
